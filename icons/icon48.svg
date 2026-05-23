@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6e00ff"/>
+      <stop offset="100%" stop-color="#ff0080"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="10" fill="url(#bg)"/>
+  <!-- 稲妻アイコン -->
+  <polygon points="28,4 14,26 24,26 20,44 34,22 24,22" fill="#fff" opacity="0.95"/>
+</svg>

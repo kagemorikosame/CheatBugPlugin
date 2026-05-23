@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ChaosMode</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        width: 280px;
+        font-family: "Segoe UI", sans-serif;
+        background: #0f0f1a;
+        color: #e0e0ff;
+      }
+
+      /* ヘッダー */
+      header {
+        background: linear-gradient(135deg, #6e00ff, #ff0080);
+        padding: 14px 16px;
+        text-align: center;
+      }
+      header h1 {
+        font-size: 1.4rem;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        color: #fff;
+        text-shadow:
+          0 0 10px #fff,
+          0 0 20px #ff0080;
+      }
+      header p {
+        font-size: 0.65rem;
+        color: rgba(255, 255, 255, 0.7);
+        margin-top: 2px;
+      }
+
+      /* ステータスバッジ */
+      #status-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 16px;
+        background: #1a1a2e;
+        border-bottom: 1px solid #2a2a4a;
+      }
+      #status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #444;
+        transition: background 0.3s;
+      }
+      #status-dot.running {
+        background: #00ff88;
+        box-shadow: 0 0 6px #00ff88;
+        animation: pulse 1s infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.4;
+        }
+      }
+      /* コントロールエリア */
+      .section {
+        padding: 12px 16px;
+        border-bottom: 1px solid #2a2a4a;
+      }
+      .section label {
+        display: block;
+        font-size: 0.75rem;
+        color: #888;
+        margin-bottom: 6px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+
+      /* カオスレベルスライダー */
+      .level-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      #chaos-level {
+        flex: 1;
+        accent-color: #ff0080;
+        cursor: pointer;
+      }
+      #level-value {
+        min-width: 18px;
+        text-align: right;
+        font-weight: bold;
+        font-size: 1rem;
+        color: #ff0080;
+      }
+
+      /* チェックボックス群 */
+      .checkbox-group {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .checkbox-group label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.82rem;
+        color: #ccc;
+        text-transform: none;
+        letter-spacing: 0;
+        cursor: pointer;
+      }
+      .checkbox-group input[type="checkbox"] {
+        accent-color: #6e00ff;
+        width: 14px;
+        height: 14px;
+        cursor: pointer;
+      }
+
+      /* グリッチワード入力 */
+      .words-input {
+        width: 100%;
+        background: #0a0a18;
+        border: 1px solid #3a3a6a;
+        border-radius: 5px;
+        color: #e0e0ff;
+        font-size: 0.8rem;
+        padding: 6px 8px;
+        resize: vertical;
+        min-height: 56px;
+        font-family: monospace;
+        line-height: 1.5;
+        outline: none;
+      }
+      .words-input:focus {
+        border-color: #6e00ff;
+        box-shadow: 0 0 4px #6e00ff66;
+      }
+      .words-hint {
+        font-size: 0.68rem;
+        color: #555;
+        margin-top: 4px;
+      }
+
+      /* ボタン群 */
+      .btn-row {
+        display: flex;
+        gap: 8px;
+        padding: 12px 16px;
+      }
+      button {
+        flex: 1;
+        padding: 9px 6px;
+        border: none;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        font-weight: bold;
+        cursor: pointer;
+        letter-spacing: 1px;
+        transition:
+          filter 0.15s,
+          transform 0.1s;
+      }
+      button:hover {
+        filter: brightness(1.2);
+      }
+      button:active {
+        transform: scale(0.96);
+      }
+
+      #btn-start {
+        background: linear-gradient(135deg, #6e00ff, #ff0080);
+        color: #fff;
+      }
+      #btn-reset {
+        background: #1a1a2e;
+        color: #ff4444;
+        border: 1px solid #ff4444;
+      }
+
+      footer {
+        text-align: center;
+        font-size: 0.6rem;
+        color: #333;
+        padding: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>⚡ ChaosMode</h1>
+      <p>HTMLとCSSをカオスに書き換えるプラグイン</p>
+    </header>
+
+    <div id="status-bar">
+      <div id="status-dot"></div>
+      <span id="status-text">未適用</span>
+    </div>
+
+    <!-- カオスレベル -->
+    <div class="section">
+      <label>カオスレベル</label>
+      <div class="level-row">
+        <span style="font-size: 0.75rem; color: #555">穏やか</span>
+        <input type="range" id="chaos-level" min="1" max="5" value="3" />
+        <span id="level-value">3</span>
+        <span style="font-size: 0.75rem; color: #555">激烈</span>
+      </div>
+    </div>
+
+    <!-- 機能オプション -->
+    <div class="section">
+      <label>カオスオプション</label>
+      <div class="checkbox-group">
+        <label
+          ><input type="checkbox" id="opt-css" checked />
+          CSS書き換え（色・サイズ・変形）</label
+        >
+        <label
+          ><input type="checkbox" id="opt-text" checked />
+          テキストグリッチ</label
+        >
+        <label><input type="checkbox" id="opt-shuffle" /> 要素シャッフル</label>
+        <label
+          ><input type="checkbox" id="opt-imgswap" checked />
+          画像をランダム差る替え</label
+        >
+        <label><input type="checkbox" id="opt-blur" /> ブラー（負荷大）</label>
+      </div>
+    </div>
+
+    <!-- グリッチワード -->
+    <div class="section">
+      <label>グリッチ混入ワード</label>
+      <textarea
+        id="glitch-words"
+        class="words-input"
+        placeholder="GLITCH&#10;ERROR&#10;バグ"
+      ></textarea>
+      <p class="words-hint">
+        1行1ワードで入力。テキストグリッチが有効なときにランダムな位置に挿入されます。
+      </p>
+    </div>
+
+    <!-- ボタン -->
+    <div class="btn-row">
+      <button id="btn-start">⚡ チートバグ発動！</button>
+      <button id="btn-reset">↺ リセット</button>
+    </div>
+
+    <footer>
+      ※ テスト・学習目的専用。自分が管理するサイトでのみ使用してください。
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

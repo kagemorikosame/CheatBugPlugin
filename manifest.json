@@ -1,0 +1,21 @@
+{
+  "manifest_version": 2,
+  "name": "ChaosMode",
+  "version": "1.0.0",
+  "description": "WebサイトのHTMLやCSSをランダムに書き換えてカオスにするプラグイン",
+  "icons": {
+    "48": "icons/icon48.svg",
+    "96": "icons/icon96.svg"
+  },
+  "browser_action": {
+    "default_icon": "icons/icon48.svg",
+    "default_popup": "popup.html",
+    "default_title": "ChaosMode"
+  },
+  "permissions": ["activeTab", "storage"],
+  "content_scripts": [],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  }
+}
