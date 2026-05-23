@@ -73,6 +73,8 @@ async function ensureContentScript(tabId) {
       document.getElementById("opt-blur").checked = resp.enableBlur;
     if (typeof resp?.enableImgSwap === "boolean")
       document.getElementById("opt-imgswap").checked = resp.enableImgSwap;
+    if (typeof resp?.enableJsChaos === "boolean")
+      document.getElementById("opt-jschaos").checked = resp.enableJsChaos;
     // 前回のグリッチワードを復元
     if (Array.isArray(resp?.glitchWords) && resp.glitchWords.length > 0) {
       glitchWordsInput.value = resp.glitchWords.join("\n");
@@ -101,6 +103,7 @@ btnStart.addEventListener("click", async () => {
     shuffle: document.getElementById("opt-shuffle").checked,
     blur: document.getElementById("opt-blur").checked,
     imgSwap: document.getElementById("opt-imgswap").checked,
+    jsChaos: document.getElementById("opt-jschaos").checked,
   });
   setStatus(true);
 });

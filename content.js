@@ -21,6 +21,7 @@
   let enableShuffle = false; // 要素シャッフル（デフォルト無効）
   let enableBlur = false; // ブラー処理（デフォルト無効）
   let enableImgSwap = true; // 画像差る替え（デフォルト有効）
+  let enableJsChaos = false; // JS定数バグ（デフォルト無効）
 
   // ---- CSS カオス処理 -----------------------------------------------
 
@@ -257,6 +258,240 @@
     }
   }
 
+  // ---- JS定数カオスフォグ -----------------------------------------
+
+  /**
+   * ページのグローバルコンテキストにスクリプトを注入する
+   * （content script のサンドボックスを回避してページの window に直接アクセス）
+   */
+  function injectPageScript(code) {
+    const script = document.createElement("script");
+    script.textContent = code;
+    (document.head || document.documentElement).appendChild(script);
+    script.remove();
+  }
+
+  /**
+   * JS定数カオスフォグ起動
+   *   1. fetch 傍受: .js ファイルロード時に数値リテラルをランダム書き換え
+   *   2. window 上のグローバル数値変数を 300ms ごとにランダム変更
+   * カオスレベルに応じて乗算倍率範囲と変異確率を変える
+   */
+  function startJsChaosFuzz() {
+    const multiplierRanges = [
+      [0.8, 1.2], // level 1: ±20%
+      [0.5, 2.0], // level 2: 半分〜2倍
+      [0.2, 3.0], // level 3
+      [0.1, 5.0], // level 4
+      [0.01, 10.0], // level 5: 激烈
+    ];
+    const [rMin, rMax] = multiplierRanges[Math.min(chaosLevel, 5) - 1];
+    const mutProb = (chaosLevel * 0.02).toFixed(3);
+
+    injectPageScript(`
+(function(){"use strict";
+if(window.__chaosModeJsActive)return;
+window.__chaosModeJsActive=true;
+var _rMin=${rMin},_rMax=${rMax},MUTPROB=${mutProb};
+function fuzzMult(){return _rMin+Math.random()*(_rMax-_rMin);}
+function fuzzNum(n){if(!isFinite(n)||n===0)return n;return n*fuzzMult();}
+
+// ==============================================
+// 1. JS ソース数値リテラル書き換え
+// ==============================================
+function fuzzJsSource(src){
+  return src.replace(
+    /(?<![A-Za-z0-9_$.])(0x[0-9A-Fa-f]+|\\d+\\.\\d+|\\d+\\.?|\\.\\d+)(?![A-Za-z0-9_$])/g,
+    function(m){
+      if(m[0]==='0'&&(m[1]==='x'||m[1]==='X'))return m;
+      var n=parseFloat(m);
+      if(!isFinite(n)||n===0||n===1||n===-1)return m;
+      var r=n*fuzzMult();
+      return m.indexOf('.')>=0?r.toFixed(6):String(Math.round(r));
+    }
+  );
+}
+
+// JSON オブジェクトの数値を再帰的に変異
+function fuzzJsonObj(obj,depth){
+  if(depth<=0||obj===null||obj===undefined)return;
+  if(Array.isArray(obj)){for(var i=0;i<obj.length;i++)fuzzJsonObj(obj[i],depth-1);return;}
+  if(typeof obj!=='object')return;
+  var keys=Object.keys(obj);
+  for(var i=0;i<keys.length;i++){
+    var k=keys[i],v=obj[k];
+    if(typeof v==='number'&&isFinite(v)&&v!==0&&v!==1&&v!==-1)obj[k]=fuzzNum(v);
+    else fuzzJsonObj(v,depth-1);
+  }
+}
+
+// ==============================================
+// 2. fetch 傍受 (.js / .json 両対応)
+// ==============================================
+// エンジン本体・フレームワークファイルはスキップ (fuzzing するとエンジン内部が壊れる)
+function isEngineFile(url){
+  return /cocos2d|physics\.js|jsb-adapter|chunk\.|vendor\.|runtime\.|settings\.[a-z0-9]+\.js|main\.[a-z0-9]+\.js/.test(url.toLowerCase());
+}
+var _origFetch=window.fetch;
+if(typeof _origFetch==='function'){
+  window.fetch=function(input,init){
+    var url=typeof input==='string'?input:(input&&input.url?String(input.url):'');
+    return _origFetch.call(this,input,init).then(function(resp){
+      var fname=url.split('/').pop().split('?')[0].toLowerCase();
+      if(/\\.js$/.test(fname)&&!isEngineFile(url)){
+        return resp.text().then(function(text){
+          try{return new Response(fuzzJsSource(text),{status:resp.status,statusText:resp.statusText,headers:resp.headers});}
+          catch(e){return new Response(text,{status:resp.status,statusText:resp.statusText,headers:resp.headers});}
+        });
+      }
+      if(/\\.json$/.test(fname)){
+        return resp.text().then(function(text){
+          try{var o=JSON.parse(text);fuzzJsonObj(o,4);return new Response(JSON.stringify(o),{status:resp.status,statusText:resp.statusText,headers:resp.headers});}
+          catch(e){return new Response(text,{status:resp.status,statusText:resp.statusText,headers:resp.headers});}
+        });
+      }
+      return resp;
+    });
+  };
+}
+
+// ==============================================
+// 3. XHR 傍受 (responseText ゲッターを上書き)
+//    Cocos Creator は XHR でアセットをロードする
+// ==============================================
+(function(){
+  var P=XMLHttpRequest.prototype;
+  var _origOpen=P.open;
+  P.open=function(m,url){this.__chaosUrl=String(url);return _origOpen.apply(this,arguments);};
+  var _rtDesc=Object.getOwnPropertyDescriptor(P,'responseText');
+  if(_rtDesc&&_rtDesc.get){
+    Object.defineProperty(P,'responseText',{
+      get:function(){
+        var raw=_rtDesc.get.call(this);
+        if(this.readyState!==4||!this.__chaosUrl||typeof raw!=='string'||raw.length===0)return raw;
+        if(!this.__chaosFuzzed){
+          var fname=this.__chaosUrl.split('/').pop().split('?')[0].toLowerCase();
+          if(/\\.js$/.test(fname)&&!isEngineFile(this.__chaosUrl))this.__chaosCached=fuzzJsSource(raw);
+          else if(/\\.json$/.test(fname)){
+            try{var o=JSON.parse(raw);fuzzJsonObj(o,4);this.__chaosCached=JSON.stringify(o);}
+            catch(e){this.__chaosCached=raw;}
+          }else this.__chaosCached=raw;
+          this.__chaosFuzzed=true;
+        }
+        return this.__chaosCached;
+      },configurable:true
+    });
+  }
+})();
+
+// ==============================================
+// 4. eval 傍受 (動的コード生成をキャッチ)
+// ==============================================
+var _origEval=window.eval;
+window.eval=function(code){
+  if(typeof code==='string')try{code=fuzzJsSource(code);}catch(e){}
+  return _origEval.call(this,code);
+};
+
+// ==============================================
+// 5. JSON.parse 傍受 (設定・レベルデータをキャッチ)
+// ==============================================
+var _origJsonParse=JSON.parse;
+JSON.parse=function(text){
+  var r=_origJsonParse.apply(this,arguments);
+  if(r!==null&&typeof r==='object')try{fuzzJsonObj(r,3);}catch(e){}
+  return r;
+};
+
+// ==============================================
+// 6. グローバル変数 + 2階層オブジェクトの定期変異
+// ==============================================
+var _skip={length:1,outerWidth:1,outerHeight:1,innerWidth:1,innerHeight:1,
+  screenX:1,screenY:1,pageXOffset:1,pageYOffset:1,scrollX:1,scrollY:1,
+  devicePixelRatio:1,NaN:1,Infinity:1};
+
+function mutateObj(obj,depth){
+  if(depth<=0||!obj||typeof obj!=='object')return;
+  if(obj===window||obj===document||obj instanceof Node||obj instanceof Function)return;
+  // CC 内部オブジェクト (_assembler/_childrenCount/_components 等を持つ) はスキップ
+  // これらを書き換えると CC エンジンが null._assembler 等でクラッシュする
+  if(typeof obj._assembler!=='undefined'||
+    typeof obj._childrenCount!=='undefined'||
+    typeof obj._components!=='undefined'||
+    typeof obj.__classname__==='string')return;
+  var keys;try{keys=Object.keys(obj);}catch(e){return;}
+  for(var i=0;i<keys.length;i++){
+    var k=keys[i];
+    try{
+      var v=obj[k];
+      if(typeof v==='number'&&isFinite(v)&&v!==0&&v!==1&&Math.random()<MUTPROB)obj[k]=fuzzNum(v);
+      else if(depth>1)mutateObj(v,depth-1);
+    }catch(e){}
+  }
+}
+
+function mutateGlobals(){
+  var keys;try{keys=Object.getOwnPropertyNames(window);}catch(e){return;}
+  for(var i=0;i<keys.length;i++){
+    var key=keys[i];
+    if(_skip[key])continue;
+    if(!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key))continue;
+    try{
+      var val=window[key];
+      if(typeof val==='number'&&isFinite(val)&&val!==0&&val!==1&&Math.random()<MUTPROB){
+        var desc=Object.getOwnPropertyDescriptor(window,key);
+        if(desc&&desc.writable!==false&&!desc.get)window[key]=fuzzNum(val);
+      }else mutateObj(val,2);
+    }catch(e){}
+  }
+}
+
+// ==============================================
+// 7. Cocos Creator シーングラフ走査
+//    全コンポーネントの数値プロパティを直接変異
+// ==============================================
+var _ccMutCount=0;
+// CC コンポーネント専用変異: '_' 始まりの内部プロパティはスキップ
+// (_type/_fillType/_assembler 等の Enum・内部参照を書き換えると CC エンジンがクラッシュする)
+function mutateCcComp(comp){
+  if(!comp||typeof comp!=='object')return;
+  var keys;try{keys=Object.keys(comp);}catch(e){return;}
+  for(var i=0;i<keys.length;i++){
+    var k=keys[i];
+    if(k.charCodeAt(0)===95)continue;  // '_' (charCode 95) = CC 内部プロパティのためスキップ
+    try{
+      var v=comp[k];
+      if(typeof v==='number'&&isFinite(v)&&v!==0&&v!==1&&Math.random()<MUTPROB)comp[k]=fuzzNum(v);
+    }catch(e){}
+  }
+}
+function mutateCcNode(node,depth){
+  if(!node||depth<=0||_ccMutCount>500)return;
+  _ccMutCount++;
+  var comps=node._components||[];
+  for(var i=0;i<comps.length;i++)mutateCcComp(comps[i]);
+  var children=node._children||node.children||[];
+  for(var j=0;j<children.length;j++)mutateCcNode(children[j],depth-1);
+}
+function mutateCcScene(){
+  if(!window.cc||!cc.director)return;
+  _ccMutCount=0;
+  try{
+    var scene=cc.director._scene;
+    if(!scene&&typeof cc.director.getScene==='function')scene=cc.director.getScene();
+    if(scene)mutateCcNode(scene,5);
+  }catch(e){}
+}
+
+window.__chaosModeJsInterval=setInterval(function(){
+  mutateGlobals();
+  mutateCcScene();
+},300);
+console.log('[ChaosMode] JSカオスフォグ起動 range:'+_rMin+'-'+_rMax);
+})();
+`);
+  }
+
   // ---- メイン カオス適用 -------------------------------------------
 
   function applyChaosTick() {
@@ -322,6 +557,7 @@
   function startChaos(level) {
     chaosLevel = Math.max(1, Math.min(5, level ?? chaosLevel));
     applyChaosTick();
+    if (enableJsChaos) startJsChaosFuzz();
     isApplied = true;
   }
 
@@ -342,6 +578,7 @@
         if (typeof msg.shuffle === "boolean") enableShuffle = msg.shuffle;
         if (typeof msg.blur === "boolean") enableBlur = msg.blur;
         if (typeof msg.imgSwap === "boolean") enableImgSwap = msg.imgSwap;
+        if (typeof msg.jsChaos === "boolean") enableJsChaos = msg.jsChaos;
         startChaos(msg.level);
         return Promise.resolve({ status: "applied" });
       case "reset":
@@ -356,6 +593,7 @@
           enableShuffle,
           enableBlur,
           enableImgSwap,
+          enableJsChaos,
           glitchWords,
         });
       default:
