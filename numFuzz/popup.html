@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>NumFuzz</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      body {
+        width: 300px;
+        font-family: "Segoe UI", sans-serif;
+        background: #0d1117;
+        color: #cdd9e5;
+      }
+
+      /* ヘッダー */
+      header {
+        background: linear-gradient(135deg, #e65c00, #f9d423);
+        padding: 14px 16px;
+        text-align: center;
+      }
+      header h1 {
+        font-size: 1.5rem;
+        letter-spacing: 4px;
+        color: #0d1117;
+        font-weight: 800;
+      }
+      header p {
+        font-size: 0.65rem;
+        color: rgba(0,0,0,0.55);
+        margin-top: 2px;
+      }
+
+      /* ステータスバー */
+      #status-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        background: #161b22;
+        border-bottom: 1px solid #21262d;
+        font-size: 0.75rem;
+      }
+      #status-dot {
+        width: 10px; height: 10px;
+        border-radius: 50%;
+        background: #3d4450;
+        flex-shrink: 0;
+        transition: background 0.3s;
+      }
+      #status-dot.active { background: #f9d423; box-shadow: 0 0 6px #f9d423; }
+      #status-text { flex: 1; }
+      #fuzz-info {
+        font-size: 0.65rem;
+        color: #8b949e;
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      /* メインコンテンツ */
+      .section {
+        padding: 12px 14px;
+        border-bottom: 1px solid #21262d;
+      }
+      .section-title {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        color: #8b949e;
+        margin-bottom: 10px;
+      }
+
+      /* トグルスイッチ */
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .toggle-label {
+        font-size: 0.9rem;
+        font-weight: 600;
+      }
+      .toggle-desc {
+        font-size: 0.7rem;
+        color: #8b949e;
+        margin-top: 2px;
+      }
+      .switch { position: relative; width: 46px; height: 24px; flex-shrink: 0; }
+      .switch input { opacity: 0; width: 0; height: 0; }
+      .slider {
+        position: absolute; inset: 0;
+        background: #3d4450;
+        border-radius: 24px;
+        cursor: pointer;
+        transition: background 0.25s;
+      }
+      .slider::before {
+        content: "";
+        position: absolute;
+        width: 18px; height: 18px;
+        left: 3px; top: 3px;
+        background: #cdd9e5;
+        border-radius: 50%;
+        transition: transform 0.25s;
+      }
+      .switch input:checked + .slider { background: #e65c00; }
+      .switch input:checked + .slider::before { transform: translateX(22px); }
+
+      /* スライダー */
+      .slider-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .slider-row:last-child { margin-bottom: 0; }
+      .slider-row label {
+        width: 90px;
+        font-size: 0.8rem;
+        flex-shrink: 0;
+      }
+      .slider-row input[type=range] {
+        flex: 1;
+        -webkit-appearance: none;
+        height: 4px;
+        background: #3d4450;
+        border-radius: 4px;
+        outline: none;
+        cursor: pointer;
+      }
+      .slider-row input[type=range]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 16px; height: 16px;
+        background: #f9d423;
+        border-radius: 50%;
+        cursor: pointer;
+      }
+      .slider-row .val {
+        width: 32px;
+        text-align: right;
+        font-size: 0.8rem;
+        color: #f9d423;
+        font-weight: 600;
+      }
+
+      /* 注意メッセージ */
+      .notice {
+        padding: 10px 14px;
+        background: #1c2128;
+        border-left: 3px solid #e65c00;
+        font-size: 0.72rem;
+        color: #8b949e;
+        line-height: 1.5;
+      }
+      .notice strong { color: #f9d423; }
+
+      /* フッター */
+      footer {
+        padding: 10px 14px;
+        text-align: center;
+        font-size: 0.65rem;
+        color: #3d4450;
+      }
+
+      /* サイト個別設定 */
+      #current-origin {
+        font-size: 0.7rem;
+        color: #8b949e;
+        margin-bottom: 10px;
+        word-break: break-all;
+        padding: 4px 8px;
+        background: #21262d;
+        border-radius: 4px;
+      }
+      .site-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .site-row label { font-size: 0.82rem; flex: 1; }
+      select#site-mode {
+        background: #21262d;
+        color: #cdd9e5;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 5px 8px;
+        font-size: 0.8rem;
+        cursor: pointer;
+        outline: none;
+      }
+      select#site-mode:focus { border-color: #e65c00; }
+      #site-badge {
+        display: inline-block;
+        margin-top: 6px;
+        font-size: 0.65rem;
+        padding: 2px 7px;
+        border-radius: 10px;
+        background: #21262d;
+        color: #8b949e;
+      }
+      #site-badge.on  { background: rgba(230,92,0,0.25); color: #f9d423; }
+      #site-badge.off { background: rgba(255,80,80,0.15); color: #ff6b6b; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>NumFuzz</h1>
+      <p>ページ読み込み時に数値を差し替える</p>
+    </header>
+
+    <div id="status-bar">
+      <div id="status-dot"></div>
+      <span id="status-text">無効</span>
+      <span id="fuzz-info">—</span>
+    </div>
+
+    <!-- このサイト -->
+    <div class="section">
+      <div class="section-title">このサイト</div>
+      <div id="current-origin">読み込み中…</div>
+      <div class="site-row">
+        <label>サイト個別設定</label>
+        <select id="site-mode">
+          <option value="global">グローバルに従う</option>
+          <option value="on">このサイトで有効</option>
+          <option value="off">このサイトで無効</option>
+        </select>
+      </div>
+      <div id="site-badge">グローバル設定を使用中</div>
+    </div>
+
+    <!-- デフォルト設定 -->
+    <div class="section">
+      <div class="section-title">デフォルト設定</div>
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">NumFuzz を有効化</div>
+          <div class="toggle-desc">サイト個別設定がない場合に適用</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggle-enable" />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- 強度・確率 -->
+    <div class="section">
+      <div class="section-title">パラメータ</div>
+      <div class="slider-row">
+        <label>強度レベル</label>
+        <input type="range" id="slider-level" min="1" max="5" step="1" value="3" />
+        <span class="val" id="val-level">3</span>
+      </div>
+      <div class="slider-row">
+        <label>対象確率</label>
+        <input type="range" id="slider-prob" min="10" max="100" step="5" value="50" />
+        <span class="val" id="val-prob">50%</span>
+      </div>
+    </div>
+
+    <!-- 強度の説明 -->
+    <div class="section">
+      <div class="section-title">強度の目安</div>
+      <div id="level-desc" style="font-size:0.78rem; line-height:1.6;"></div>
+    </div>
+
+    <div class="notice">
+      <strong>適用タイミング：</strong>
+      設定変更後にゲームページを<strong>リロード</strong>すると、
+      JS・JSON内の数値がページ読み込み時に一括で差し替えられます。
+    </div>
+
+    <footer>NumFuzz v1.0.0</footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

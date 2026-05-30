@@ -1,0 +1,201 @@
+// ============================================================
+//  NumFuzz - background.js
+//
+//  filterResponseData でネットワークレベルの傍受を実装
+//  <script src="..."> タグ経由の JS も含め全スクリプトを書き換え可能
+//
+//  ★ content.js の fetch/XHR フックでは届かなかった
+//    <script src> タグをここで補完する
+// ============================================================
+
+"use strict";
+
+const RANGES = [
+  [0.9,  1.1 ],  // level 1: ±10%
+  [0.7,  1.5 ],  // level 2
+  [0.5,  2.0 ],  // level 3: 半分〜2倍
+  [0.2,  5.0 ],  // level 4
+  [0.01, 10.0],  // level 5: 激烈
+];
+
+// ページロード単位で乗数を統一するためのタブ別キャッシュ
+const _tabState = new Map(); // tabId -> { mult, prob }
+
+// タブがローディング開始 or 削除されたらキャッシュをクリア
+browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "loading") _tabState.delete(tabId);
+});
+browser.tabs.onRemoved.addListener((tabId) => _tabState.delete(tabId));
+
+// ----------------------------------------------------------------
+//  Cocos Creator エンジン本体のみスキップ
+//  main.*.js や chunk.*.js はゲームスクリプトなので Fuzz 対象にする
+// ----------------------------------------------------------------
+function isEngineFile(url) {
+  return /cocos2d|jsb-adapter|physics-builtin|physics-cannon|ammo\.wasm/.test(
+    url.toLowerCase()
+  );
+}
+
+// JS ソースの数値リテラルを書き換える
+function fuzzJs(src, mult, prob) {
+  let count = 0;
+  const out = src.replace(
+    /(?<![A-Za-z0-9_$.])(0x[0-9A-Fa-f]+|\d+\.\d+|\d+\.?|\.\d+)(?![A-Za-z0-9_$])/g,
+    (t) => {
+      if (t[0] === "0" && (t[1] === "x" || t[1] === "X")) return t;
+      const n = parseFloat(t);
+      if (!isFinite(n) || n === 0 || n === 1 || n === -1 || Math.random() > prob) return t;
+      count++;
+      const r = n * mult;
+      return t.includes(".") ? r.toFixed(6) : String(Math.round(r));
+    }
+  );
+  return { out, count };
+}
+
+// JSON オブジェクトの数値を再帰的に書き換える
+function fuzzObj(o, d, mult) {
+  if (d <= 0 || o === null || o === undefined) return;
+  if (Array.isArray(o)) { for (const v of o) fuzzObj(v, d - 1, mult); return; }
+  if (typeof o !== "object") return;
+  for (const k of Object.keys(o)) {
+    const v = o[k];
+    if (typeof v === "number" && isFinite(v) && v !== 0 && v !== 1 && v !== -1)
+      o[k] = v * mult;
+    else fuzzObj(v, d - 1, mult);
+  }
+}
+
+// ----------------------------------------------------------------
+//  タブの乗数を取得（なければ生成して _tabState に保存）
+//  storage から level/prob を読んで初期化する
+// ----------------------------------------------------------------
+function ensureTabState(tabId, s) {
+  if (!_tabState.has(tabId)) {
+    const [rMin, rMax] = RANGES[Math.min(s.numFuzzLevel, 5) - 1];
+    const mult = rMin + Math.random() * (rMax - rMin);
+    _tabState.set(tabId, { mult, prob: Number(s.numFuzzProb) });
+    console.log(`[NumFuzz BG] タブ${tabId} 乗数生成: ${mult.toFixed(6)} prob:${s.numFuzzProb}`);
+  }
+  return _tabState.get(tabId);
+}
+
+// ================================================================
+//  メインのネットワーク傍受リスナー
+//  types: ["script"] → <script src="..."> タグを傍受できる
+//  types: ["xmlhttprequest"] → fetch()/XHR を傍受できる
+// ================================================================
+browser.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    const { url, tabId } = details;
+    if (tabId < 0) return {}; // バックグラウンドリクエストはスキップ
+
+    const fname = url.split("/").pop().split("?")[0].toLowerCase();
+    const isJs   = /\.js$/.test(fname);
+    const isJson = /\.json$/.test(fname);
+    if (!isJs && !isJson) return {};
+    if (isEngineFile(url)) {
+      console.log(`[NumFuzz BG] スキップ(エンジン): ${fname}`);
+      return {};
+    }
+
+    const filter  = browser.webRequest.filterResponseData(details.requestId);
+    const dec     = new TextDecoder("utf-8");
+    const enc     = new TextEncoder();
+    const chunks  = [];
+
+    filter.ondata  = (e) => chunks.push(e.data);
+    filter.onerror = () => {};
+
+    filter.onstop = () => {
+      // バイト列 → 文字列
+      let raw = "";
+      for (const chunk of chunks) raw += dec.decode(chunk, { stream: true });
+      raw += dec.decode(); // flush
+
+      let origin = "";
+      try { origin = new URL(url).origin; } catch (_) {}
+
+      browser.storage.local.get({
+        numFuzzEnabled: false,
+        numFuzzSites:   {},
+        numFuzzLevel:   3,
+        numFuzzProb:    0.5,
+      }).then((s) => {
+        // サイト別オーバーライドを確認
+        const siteOv  = s.numFuzzSites[origin];
+        const enabled = siteOv !== undefined ? siteOv : s.numFuzzEnabled;
+
+        if (!enabled) {
+          console.log(`[NumFuzz BG] 無効のためパス: ${fname}`);
+          filter.write(enc.encode(raw));
+          filter.disconnect();
+          return;
+        }
+
+        const { mult, prob } = ensureTabState(tabId, s);
+
+        try {
+          let result;
+          if (isJs) {
+            const { out, count } = fuzzJs(raw, mult, prob);
+            console.log(`[NumFuzz BG] ✅ JS  ${fname}: ${count}箇所変更 (mult=${mult.toFixed(4)})`);
+            result = out;
+          } else {
+            const o = JSON.parse(raw);
+            fuzzObj(o, 6, mult);
+            console.log(`[NumFuzz BG] ✅ JSON ${fname}: 変更完了 (mult=${mult.toFixed(4)})`);
+            result = JSON.stringify(o);
+          }
+          filter.write(enc.encode(result));
+        } catch (e) {
+          console.warn(`[NumFuzz BG] ❌ 書き換えエラー ${fname}:`, e.message);
+          filter.write(enc.encode(raw));
+        }
+        filter.disconnect();
+      }).catch((e) => {
+        console.warn("[NumFuzz BG] storage エラー:", e);
+        filter.write(enc.encode(raw));
+        filter.disconnect();
+      });
+    };
+
+    return {};
+  },
+  { urls: ["<all_urls>"], types: ["script", "xmlhttprequest"] },
+  ["blocking"]
+);
+
+// ----------------------------------------------------------------
+//  content.js からのメッセージ受信
+//  getTabMult: content.js が eval/JSON.parse フック用に乗数を要求
+// ----------------------------------------------------------------
+browser.runtime.onMessage.addListener((msg, sender) => {
+  if (msg.action === "numFuzzReady") {
+    browser.storage.local.set({
+      numFuzzLastMult: msg.mult,
+      numFuzzLastUrl:  sender.url || "",
+    }).catch(() => {});
+  }
+
+  if (msg.action === "getTabMult") {
+    const tabId = sender.tab ? sender.tab.id : -1;
+    if (_tabState.has(tabId)) {
+      return Promise.resolve(_tabState.get(tabId).mult);
+    }
+    // まだスクリプトリクエストが来ていない場合はここで生成
+    return browser.storage.local.get({
+      numFuzzEnabled: false,
+      numFuzzSites:   {},
+      numFuzzLevel:   3,
+      numFuzzProb:    0.5,
+    }).then((s) => {
+      const origin  = sender.url ? new URL(sender.url).origin : "";
+      const siteOv  = s.numFuzzSites[origin];
+      const enabled = siteOv !== undefined ? siteOv : s.numFuzzEnabled;
+      if (!enabled) return null;
+      return ensureTabState(tabId, s).mult;
+    });
+  }
+});
