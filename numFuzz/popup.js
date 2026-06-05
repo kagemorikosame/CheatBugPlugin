@@ -81,8 +81,9 @@ function getEffectiveEnabled(globalEnabled, sites) {
  */
 function updateSiteBadge(sites) {
   if (!currentOrigin || !(currentOrigin in sites)) {
-    siteBadge.textContent = "グローバル設定を使用中";
-    siteBadge.className = "";
+    // 未設定サイトはデフォルト無効として表示
+    siteBadge.textContent = "このサイト: 未設定（デフォルト無効）";
+    siteBadge.className = "off";
   } else if (sites[currentOrigin]) {
     siteBadge.textContent = "このサイト: カスタム有効";
     siteBadge.className = "on";
@@ -124,11 +125,11 @@ browser.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
   valProb.textContent  = Math.round(s.numFuzzProb * 100) + "%";
   updateLevelDesc(s.numFuzzLevel);
 
-  // サイト別設定をセレクトに反映
+  // サイト別設定をセレクトに反映（未設定サイトはデフォルト「off」）
   if (currentOrigin && currentOrigin in s.numFuzzSites) {
     siteModeEl.value = s.numFuzzSites[currentOrigin] ? "on" : "off";
   } else {
-    siteModeEl.value = "global";
+    siteModeEl.value = "off";
   }
 
   updateSiteBadge(s.numFuzzSites);

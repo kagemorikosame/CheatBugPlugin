@@ -11,15 +11,52 @@
 "use strict";
 
 const RANGES = [
-  [0.9,  1.1 ],  // level 1: ±10%
-  [0.7,  1.5 ],  // level 2
-  [0.5,  2.0 ],  // level 3: 半分〜2倍
-  [0.2,  5.0 ],  // level 4
-  [0.01, 10.0],  // level 5: 激烈
+  [0.9, 1.1], // level 1: ±10%
+  [0.7, 1.5], // level 2
+  [0.5, 2.0], // level 3: 半分〜2倍
+  [0.2, 5.0], // level 4
+  [0.01, 10.0], // level 5: 激烈
 ];
 
 // ページロード単位で乗数を統一するためのタブ別キャッシュ
 const _tabState = new Map(); // tabId -> { mult, prob }
+
+// ----------------------------------------------------------------
+//  設定キャッシュ（起動時・変更時に更新）
+//  onBeforeRequest 内で同期的に参照し、無効サイトはフィルタ自体を作らない
+//
+//  ★ SRI 問題の根本原因：従来は無効サイトでも filterResponseData を生成して
+//    TextDecoder → TextEncoder でバイト列を冊情報を通して書き戻していたため、
+//    reCAPTCHA 等 SRI 付きスクリプトのハッシュ不一致 → Google CAPTCHA 発生
+// ----------------------------------------------------------------
+let _settingsCache = {
+  numFuzzEnabled: false,
+  numFuzzSites: {},
+  numFuzzLevel: 3,
+  numFuzzProb: 0.5,
+};
+
+function refreshSettingsCache() {
+  browser.storage.local
+    .get({
+      numFuzzEnabled: false,
+      numFuzzSites: {},
+      numFuzzLevel: 3,
+      numFuzzProb: 0.5,
+    })
+    .then((s) => {
+      _settingsCache = s;
+    })
+    .catch(() => {});
+}
+
+refreshSettingsCache(); // 起動時に読み込み
+browser.storage.onChanged.addListener(refreshSettingsCache); // ポップアップで変更時に自動更新
+
+function isEnabledForOrigin(origin) {
+  const siteOv = _settingsCache.numFuzzSites[origin];
+  return siteOv !== undefined ? siteOv : _settingsCache.numFuzzEnabled;
+}
 
 // タブがローディング開始 or 削除されたらキャッシュをクリア
 browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -33,7 +70,7 @@ browser.tabs.onRemoved.addListener((tabId) => _tabState.delete(tabId));
 // ----------------------------------------------------------------
 function isEngineFile(url) {
   return /cocos2d|jsb-adapter|physics-builtin|physics-cannon|ammo\.wasm/.test(
-    url.toLowerCase()
+    url.toLowerCase(),
   );
 }
 
@@ -45,11 +82,18 @@ function fuzzJs(src, mult, prob) {
     (t) => {
       if (t[0] === "0" && (t[1] === "x" || t[1] === "X")) return t;
       const n = parseFloat(t);
-      if (!isFinite(n) || n === 0 || n === 1 || n === -1 || Math.random() > prob) return t;
+      if (
+        !isFinite(n) ||
+        n === 0 ||
+        n === 1 ||
+        n === -1 ||
+        Math.random() > prob
+      )
+        return t;
       count++;
       const r = n * mult;
       return t.includes(".") ? r.toFixed(6) : String(Math.round(r));
-    }
+    },
   );
   return { out, count };
 }
@@ -57,7 +101,10 @@ function fuzzJs(src, mult, prob) {
 // JSON オブジェクトの数値を再帰的に書き換える
 function fuzzObj(o, d, mult) {
   if (d <= 0 || o === null || o === undefined) return;
-  if (Array.isArray(o)) { for (const v of o) fuzzObj(v, d - 1, mult); return; }
+  if (Array.isArray(o)) {
+    for (const v of o) fuzzObj(v, d - 1, mult);
+    return;
+  }
   if (typeof o !== "object") return;
   for (const k of Object.keys(o)) {
     const v = o[k];
@@ -76,7 +123,9 @@ function ensureTabState(tabId, s) {
     const [rMin, rMax] = RANGES[Math.min(s.numFuzzLevel, 5) - 1];
     const mult = rMin + Math.random() * (rMax - rMin);
     _tabState.set(tabId, { mult, prob: Number(s.numFuzzProb) });
-    console.log(`[NumFuzz BG] タブ${tabId} 乗数生成: ${mult.toFixed(6)} prob:${s.numFuzzProb}`);
+    console.log(
+      `[NumFuzz BG] タブ${tabId} 乗数生成: ${mult.toFixed(6)} prob:${s.numFuzzProb}`,
+    );
   }
   return _tabState.get(tabId);
 }
@@ -92,7 +141,7 @@ browser.webRequest.onBeforeRequest.addListener(
     if (tabId < 0) return {}; // バックグラウンドリクエストはスキップ
 
     const fname = url.split("/").pop().split("?")[0].toLowerCase();
-    const isJs   = /\.js$/.test(fname);
+    const isJs = /\.js$/.test(fname);
     const isJson = /\.json$/.test(fname);
     if (!isJs && !isJson) return {};
     if (isEngineFile(url)) {
@@ -100,12 +149,22 @@ browser.webRequest.onBeforeRequest.addListener(
       return {};
     }
 
-    const filter  = browser.webRequest.filterResponseData(details.requestId);
-    const dec     = new TextDecoder("utf-8");
-    const enc     = new TextEncoder();
-    const chunks  = [];
+    // ★ キャッシュで同期チェック：無効サイトはフィルタを一切作らない
+    //   → SRI 付きスクリプト(reCAPTCHA等)のバイト列に完全に無影響
+    let reqOrigin = "";
+    try {
+      reqOrigin = new URL(url).origin;
+    } catch (_) {}
+    if (!isEnabledForOrigin(reqOrigin)) {
+      return {}; // フィルタ不作成：ブラウザがレスポンスをそのまま受け取る
+    }
 
-    filter.ondata  = (e) => chunks.push(e.data);
+    const filter = browser.webRequest.filterResponseData(details.requestId);
+    const dec = new TextDecoder("utf-8");
+    const enc = new TextEncoder();
+    const chunks = [];
+
+    filter.ondata = (e) => chunks.push(e.data);
     filter.onerror = () => {};
 
     filter.onstop = () => {
@@ -114,57 +173,63 @@ browser.webRequest.onBeforeRequest.addListener(
       for (const chunk of chunks) raw += dec.decode(chunk, { stream: true });
       raw += dec.decode(); // flush
 
-      let origin = "";
-      try { origin = new URL(url).origin; } catch (_) {}
+      // ここまで来た時点でキャッシュによる有効チェック済み。
+      // storage から最新値を読み直して乗数を決定する。
+      browser.storage.local
+        .get({
+          numFuzzEnabled: false,
+          numFuzzSites: {},
+          numFuzzLevel: 3,
+          numFuzzProb: 0.5,
+        })
+        .then((s) => {
+          // onBeforeRequest 通過後に設定が変わった場合の二重確認
+          const siteOv = s.numFuzzSites[reqOrigin];
+          const enabled = siteOv !== undefined ? siteOv : s.numFuzzEnabled;
 
-      browser.storage.local.get({
-        numFuzzEnabled: false,
-        numFuzzSites:   {},
-        numFuzzLevel:   3,
-        numFuzzProb:    0.5,
-      }).then((s) => {
-        // サイト別オーバーライドを確認
-        const siteOv  = s.numFuzzSites[origin];
-        const enabled = siteOv !== undefined ? siteOv : s.numFuzzEnabled;
+          if (!enabled) {
+            // フィルター作成後に設定が無効に変わったケース（ほぼ起きないが安全策）
+            filter.write(enc.encode(raw));
+            filter.disconnect();
+            return;
+          }
 
-        if (!enabled) {
-          console.log(`[NumFuzz BG] 無効のためパス: ${fname}`);
+          const { mult, prob } = ensureTabState(tabId, s);
+
+          try {
+            let result;
+            if (isJs) {
+              const { out, count } = fuzzJs(raw, mult, prob);
+              console.log(
+                `[NumFuzz BG] ✅ JS  ${fname}: ${count}箇所変更 (mult=${mult.toFixed(4)})`,
+              );
+              result = out;
+            } else {
+              const o = JSON.parse(raw);
+              fuzzObj(o, 6, mult);
+              console.log(
+                `[NumFuzz BG] ✅ JSON ${fname}: 変更完了 (mult=${mult.toFixed(4)})`,
+              );
+              result = JSON.stringify(o);
+            }
+            filter.write(enc.encode(result));
+          } catch (e) {
+            console.warn(`[NumFuzz BG] ❌ 書き換えエラー ${fname}:`, e.message);
+            filter.write(enc.encode(raw));
+          }
+          filter.disconnect();
+        })
+        .catch((e) => {
+          console.warn("[NumFuzz BG] storage エラー:", e);
           filter.write(enc.encode(raw));
           filter.disconnect();
-          return;
-        }
-
-        const { mult, prob } = ensureTabState(tabId, s);
-
-        try {
-          let result;
-          if (isJs) {
-            const { out, count } = fuzzJs(raw, mult, prob);
-            console.log(`[NumFuzz BG] ✅ JS  ${fname}: ${count}箇所変更 (mult=${mult.toFixed(4)})`);
-            result = out;
-          } else {
-            const o = JSON.parse(raw);
-            fuzzObj(o, 6, mult);
-            console.log(`[NumFuzz BG] ✅ JSON ${fname}: 変更完了 (mult=${mult.toFixed(4)})`);
-            result = JSON.stringify(o);
-          }
-          filter.write(enc.encode(result));
-        } catch (e) {
-          console.warn(`[NumFuzz BG] ❌ 書き換えエラー ${fname}:`, e.message);
-          filter.write(enc.encode(raw));
-        }
-        filter.disconnect();
-      }).catch((e) => {
-        console.warn("[NumFuzz BG] storage エラー:", e);
-        filter.write(enc.encode(raw));
-        filter.disconnect();
-      });
+        });
     };
 
     return {};
   },
   { urls: ["<all_urls>"], types: ["script", "xmlhttprequest"] },
-  ["blocking"]
+  ["blocking"],
 );
 
 // ----------------------------------------------------------------
@@ -173,10 +238,12 @@ browser.webRequest.onBeforeRequest.addListener(
 // ----------------------------------------------------------------
 browser.runtime.onMessage.addListener((msg, sender) => {
   if (msg.action === "numFuzzReady") {
-    browser.storage.local.set({
-      numFuzzLastMult: msg.mult,
-      numFuzzLastUrl:  sender.url || "",
-    }).catch(() => {});
+    browser.storage.local
+      .set({
+        numFuzzLastMult: msg.mult,
+        numFuzzLastUrl: sender.url || "",
+      })
+      .catch(() => {});
   }
 
   if (msg.action === "getTabMult") {
@@ -185,17 +252,19 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       return Promise.resolve(_tabState.get(tabId).mult);
     }
     // まだスクリプトリクエストが来ていない場合はここで生成
-    return browser.storage.local.get({
-      numFuzzEnabled: false,
-      numFuzzSites:   {},
-      numFuzzLevel:   3,
-      numFuzzProb:    0.5,
-    }).then((s) => {
-      const origin  = sender.url ? new URL(sender.url).origin : "";
-      const siteOv  = s.numFuzzSites[origin];
-      const enabled = siteOv !== undefined ? siteOv : s.numFuzzEnabled;
-      if (!enabled) return null;
-      return ensureTabState(tabId, s).mult;
-    });
+    return browser.storage.local
+      .get({
+        numFuzzEnabled: false,
+        numFuzzSites: {},
+        numFuzzLevel: 3,
+        numFuzzProb: 0.5,
+      })
+      .then((s) => {
+        const origin = sender.url ? new URL(sender.url).origin : "";
+        const siteOv = s.numFuzzSites[origin];
+        const enabled = siteOv !== undefined ? siteOv : s.numFuzzEnabled;
+        if (!enabled) return null;
+        return ensureTabState(tabId, s).mult;
+      });
   }
 });
