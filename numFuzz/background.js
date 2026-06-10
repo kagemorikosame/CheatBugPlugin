@@ -86,7 +86,7 @@ function isThirdPartyCdn(url) {
 // 検索エンジン・認証・決済など、bot検出やreCAPTCHAを使うセンシティブなオリジンはスキップ
 // グローバル有効でもこれらのサイトは絶対に書き換えない
 const SENSITIVE_ORIGIN_RE =
-  /\b(google|googleapis|gstatic|recaptcha|bing|yahoo|duckduckgo|yandex|baidu|naver|ecosia|brave\.com|paypal|stripe|amazon|apple|icloud|microsoft|live\.com|outlook|github|gitlab|twitter|x\.com|facebook|instagram|linkedin|reddit|wikipedia)\b/i;
+  /\b(google|googleapis|gstatic|recaptcha|youtube|ytimg|bing|yahoo|duckduckgo|yandex|baidu|naver|ecosia|brave\.com|paypal|stripe|amazon|apple|icloud|microsoft|live\.com|outlook|github|gitlab|twitter|x\.com|facebook|instagram|linkedin|reddit|wikipedia)\b/i;
 
 function isSensitiveSite(origin) {
   return SENSITIVE_ORIGIN_RE.test(origin);

@@ -11,7 +11,7 @@
 // ============================================================
 
 // センシティブサイト判定（検索エンジン・認証・決済等はグローバル有効でも介入しない）
-const _SENSITIVE_RE = /\b(google|googleapis|gstatic|recaptcha|bing|yahoo|duckduckgo|yandex|baidu|naver|ecosia|paypal|stripe|amazon|apple|icloud|microsoft|live\.com|outlook|github|gitlab|twitter|x\.com|facebook|instagram|linkedin|reddit|wikipedia)\b/i;
+const _SENSITIVE_RE = /\b(google|googleapis|gstatic|recaptcha|youtube|ytimg|bing|yahoo|duckduckgo|yandex|baidu|naver|ecosia|paypal|stripe|amazon|apple|icloud|microsoft|live\.com|outlook|github|gitlab|twitter|x\.com|facebook|instagram|linkedin|reddit|wikipedia)\b/i;
 function _isSensitive(origin) { return _SENSITIVE_RE.test(origin); }
 
 (function () {
