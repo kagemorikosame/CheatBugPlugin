@@ -10,6 +10,10 @@
 //  getTabMult メッセージで取得する。
 // ============================================================
 
+// センシティブサイト判定（検索エンジン・認証・決済等はグローバル有効でも介入しない）
+const _SENSITIVE_RE = /\b(google|googleapis|gstatic|recaptcha|bing|yahoo|duckduckgo|yandex|baidu|naver|ecosia|paypal|stripe|amazon|apple|icloud|microsoft|live\.com|outlook|github|gitlab|twitter|x\.com|facebook|instagram|linkedin|reddit|wikipedia)\b/i;
+function _isSensitive(origin) { return _SENSITIVE_RE.test(origin); }
+
 (function () {
   "use strict";
 
@@ -21,7 +25,7 @@
     const siteOv  = s.numFuzzSites[origin];
     const enabled = siteOv !== undefined ? siteOv : s.numFuzzEnabled;
 
-    if (!enabled) {
+    if (!enabled || _isSensitive(origin)) {
       console.log("[NumFuzz] 無効 (origin: " + origin + ")");
       return;
     }
@@ -52,11 +56,11 @@ console.log('%c[NumFuzz] eval/JSON.parse フック設置 mult='+MULT.toFixed(6),
 
 function fuzzSrc(src){
   return src.replace(
-    /(?<![A-Za-z0-9_$.])(0x[0-9A-Fa-f]+|\\d+\\.\\d+|\\d+\\.?|\\.\\d+)(?![A-Za-z0-9_$])/g,
+    /(?<![A-Za-z0-9_$.\\[])(0x[0-9A-Fa-f]+|\\d+\\.\\d+|\\d+\\.?|\\.\\d+)(?![A-Za-z0-9_$\\]:])/g,
     function(t){
       if(t[0]==='0'&&(t[1]==='x'||t[1]==='X'))return t;
       var n=parseFloat(t);
-      if(!isFinite(n)||n===0||n===1||n===-1)return t;
+      if(!isFinite(n)||(t.indexOf('.')<0&&Math.abs(n)<=10))return t;
       var r=n*MULT;
       return t.indexOf('.')>=0?r.toFixed(6):String(Math.round(r));
     }
@@ -141,19 +145,23 @@ console.log('[NumFuzz] 乗数(MULT):', MULT.toFixed(6));
 console.log('[NumFuzz] 確率(PROB):', PROB);
 console.log('[NumFuzz] ⚠ <script src> タグ経由のJSは傍受できません');
 
+var _pageOrigin=window.location.origin;
 function isEngineFile(url){
-  return /cocos2d|physics\\.js|jsb-adapter|chunk\\.|vendor\\.|runtime\\./.test(url.toLowerCase());
+  return /cocos2d|physics\\.js|jsb-adapter|chunk\\.|vendor\\.|runtime\\.|phaser/.test(url.toLowerCase());
+}
+function isCrossOrigin(url){
+  try{return new URL(url).origin!==_pageOrigin;}catch(e){return false;}
 }
 
 var _fuzzedTotal=0;
 function fuzzSrc(src, label){
   var before=_fuzzedTotal;
   var out=src.replace(
-    /(?<![A-Za-z0-9_$.])(0x[0-9A-Fa-f]+|\\d+\\.\\d+|\\d+\\.?|\\.\\d+)(?![A-Za-z0-9_$])/g,
+    /(?<![A-Za-z0-9_$.\\[])(0x[0-9A-Fa-f]+|\\d+\\.\\d+|\\d+\\.?|\\.\\d+)(?![A-Za-z0-9_$\\]:])/g,
     function(t){
       if(t[0]==='0'&&(t[1]==='x'||t[1]==='X'))return t;
       var n=parseFloat(t);
-      if(!isFinite(n)||n===0||n===1||n===-1||Math.random()>PROB)return t;
+      if(!isFinite(n)||(t.indexOf('.')<0&&Math.abs(n)<=10)||Math.random()>PROB)return t;
       _fuzzedTotal++;
       var r=n*MULT;
       return t.indexOf('.')>=0?r.toFixed(6):String(Math.round(r));
@@ -194,10 +202,8 @@ if(typeof _origFetch==='function'){
       var isJs=/\\.js$/.test(fname);
       var isJson=/\\.json$/.test(fname);
       if(!isJs&&!isJson){return resp;}
-      if(isJs&&isEngineFile(url)){
-        console.log('[NumFuzz] fetch スキップ(エンジンファイル): '+fname);
-        return resp;
-      }
+      if(isCrossOrigin(url)){return resp;} // クロスオリジンはスキップ
+      if(isJs&&isEngineFile(url)){return resp;}
       _interceptCount.fetch++;
       console.log('[NumFuzz] fetch 傍受 #'+_interceptCount.fetch+': '+fname+' ('+url.slice(0,80)+')');
       if(isJs){
@@ -246,7 +252,7 @@ if(typeof _origFetch==='function'){
           var fname=this.__nfUrl.split('/').pop().split('?')[0].toLowerCase();
           var isJs=/\\.js$/.test(fname);
           var isJson=/\\.json$/.test(fname);
-          if((isJs&&!isEngineFile(this.__nfUrl))||isJson){
+          if(!isCrossOrigin(this.__nfUrl)&&((isJs&&!isEngineFile(this.__nfUrl))||isJson)){
             _interceptCount.xhr++;
             console.log('[NumFuzz] XHR 傍受 #'+_interceptCount.xhr+': '+fname+' ('+this.__nfUrl.slice(0,80)+')');
             if(isJs){
@@ -317,7 +323,7 @@ console.log('[NumFuzz] 全フック設置完了。動的にfetch/XHRでロード
     const siteOverride = s.numFuzzSites[origin];
     const enabled = siteOverride !== undefined ? siteOverride : s.numFuzzEnabled;
 
-    if (!enabled) {
+    if (!enabled || _isSensitive(origin)) {
       console.log("[NumFuzz] 無効 (origin: " + origin + ")");
       return;
     }
@@ -386,17 +392,20 @@ window.__numFuzzProb=1.0;
 window.__numFuzzCount=0;
 
 function isEngineFile(url){
-  return /cocos2d|physics\\.js|jsb-adapter|chunk\\.|vendor\\.|runtime\\./.test(url.toLowerCase());
+  return /cocos2d|physics\\.js|jsb-adapter|chunk\\.|vendor\\.|runtime\\.|phaser/.test(url.toLowerCase());
+}
+function isCrossOrigin(url){
+  try{return new URL(url).origin!==window.location.origin;}catch(e){return false;}
 }
 function fuzzSrc(src){
   var m=window.__numFuzzMult,p=window.__numFuzzProb;
   if(m===null)return src;
   return src.replace(
-    /(?<![A-Za-z0-9_$.])(0x[0-9A-Fa-f]+|\\d+\\.\\d+|\\d+\\.?|\\.\\d+)(?![A-Za-z0-9_$])/g,
+    /(?<![A-Za-z0-9_$.\\[])(0x[0-9A-Fa-f]+|\\d+\\.\\d+|\\d+\\.?|\\.\\d+)(?![A-Za-z0-9_$\\]:])/g,
     function(t){
       if(t[0]==='0'&&(t[1]==='x'||t[1]==='X'))return t;
       var n=parseFloat(t);
-      if(!isFinite(n)||n===0||n===1||n===-1||Math.random()>p)return t;
+      if(!isFinite(n)||(t.indexOf('.')<0&&Math.abs(n)<=10)||Math.random()>p)return t;
       window.__numFuzzCount++;
       var r=n*m;
       return t.indexOf('.')>=0?r.toFixed(6):String(Math.round(r));
@@ -424,6 +433,7 @@ if(typeof _origFetch==='function'){
     var url=typeof input==='string'?input:(input&&input.url?String(input.url):'');
     return _origFetch.call(this,input,init).then(function(resp){
       if(window.__numFuzzMult===null)return resp;
+      if(isCrossOrigin(url))return resp; // クロスオリジンはスキップ
       var fname=url.split('/').pop().split('?')[0].toLowerCase();
       if(/\\.js$/.test(fname)&&!isEngineFile(url)){
         return resp.text().then(function(text){
@@ -454,7 +464,7 @@ if(typeof _origFetch==='function'){
         var raw=_rtDesc.get.call(this);
         if(this.readyState!==4||!this.__nfUrl||typeof raw!=='string'||!raw)return raw;
         if(!this.__nfDone){
-          if(window.__numFuzzMult!==null){
+          if(window.__numFuzzMult!==null&&!isCrossOrigin(this.__nfUrl)){
             var fname=this.__nfUrl.split('/').pop().split('?')[0].toLowerCase();
             if(/\\.js$/.test(fname)&&!isEngineFile(this.__nfUrl))
               this.__nfVal=fuzzSrc(raw);
@@ -518,7 +528,7 @@ console.log('[NumFuzz] フック設置完了 (設定読み込み待機中)');
     const origin = location.origin;
     const siteOverride = s.numFuzzSites[origin];
     const enabled = siteOverride !== undefined ? siteOverride : s.numFuzzEnabled;
-    if (!enabled) {
+    if (!enabled || _isSensitive(origin)) {
       console.log("[NumFuzz] 無効 (origin: " + origin + ")");
       return;
     }

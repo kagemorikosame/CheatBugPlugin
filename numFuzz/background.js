@@ -69,24 +69,40 @@ browser.tabs.onRemoved.addListener((tabId) => _tabState.delete(tabId));
 //  main.*.js や chunk.*.js はゲームスクリプトなので Fuzz 対象にする
 // ----------------------------------------------------------------
 function isEngineFile(url) {
-  return /cocos2d|jsb-adapter|physics-builtin|physics-cannon|ammo\.wasm/.test(
+  return /cocos2d|jsb-adapter|physics-builtin|physics-cannon|ammo\.wasm|phaser/.test(
     url.toLowerCase(),
   );
+}
+
+// SRI ハッシュが付くサードパーティ CDN はスキップ
+// (内容を書き換えると integrity チェック失敗でゲームが止まる)
+const THIRD_PARTY_CDN_RE =
+  /\b(cloudflareinsights|google-analytics|googletagmanager|googlesyndication|doubleclick|facebook\.net|fbcdn\.net|clarity\.ms|hotjar|newrelic|datadoghq|segment\.io|mixpanel|amplitude|intercom|zendesk|sentry\.io|bugsnag|rollbar|logrocket)\b/i;
+
+function isThirdPartyCdn(url) {
+  return THIRD_PARTY_CDN_RE.test(url);
+}
+
+// 検索エンジン・認証・決済など、bot検出やreCAPTCHAを使うセンシティブなオリジンはスキップ
+// グローバル有効でもこれらのサイトは絶対に書き換えない
+const SENSITIVE_ORIGIN_RE =
+  /\b(google|googleapis|gstatic|recaptcha|bing|yahoo|duckduckgo|yandex|baidu|naver|ecosia|brave\.com|paypal|stripe|amazon|apple|icloud|microsoft|live\.com|outlook|github|gitlab|twitter|x\.com|facebook|instagram|linkedin|reddit|wikipedia)\b/i;
+
+function isSensitiveSite(origin) {
+  return SENSITIVE_ORIGIN_RE.test(origin);
 }
 
 // JS ソースの数値リテラルを書き換える
 function fuzzJs(src, mult, prob) {
   let count = 0;
   const out = src.replace(
-    /(?<![A-Za-z0-9_$.])(0x[0-9A-Fa-f]+|\d+\.\d+|\d+\.?|\.\d+)(?![A-Za-z0-9_$])/g,
+    /(?<![A-Za-z0-9_$.\[])(0x[0-9A-Fa-f]+|\d+\.\d+|\d+\.?|\.\d+)(?![A-Za-z0-9_$\]:])/g,
     (t) => {
       if (t[0] === "0" && (t[1] === "x" || t[1] === "X")) return t;
       const n = parseFloat(t);
       if (
         !isFinite(n) ||
-        n === 0 ||
-        n === 1 ||
-        n === -1 ||
+        (t.indexOf(".") < 0 && Math.abs(n) <= 10) || // 小整数（-10〜10）はスキップ
         Math.random() > prob
       )
         return t;
@@ -138,43 +154,63 @@ function ensureTabState(tabId, s) {
 browser.webRequest.onBeforeRequest.addListener(
   (details) => {
     const { url, tabId } = details;
-    if (tabId < 0) return {}; // バックグラウンドリクエストはスキップ
+    if (tabId < 0) return {};
 
-    const fname = url.split("/").pop().split("?")[0].toLowerCase();
-    const isJs = /\.js$/.test(fname);
-    const isJson = /\.json$/.test(fname);
+    // URLパスに .js/.json が含まれるか確認（version hash がパス末尾に来るURLも考慮）
+    const isJs   = /\.js(?:\/|$|\?)/.test(url) || /\.js$/.test(url.split("/").pop().split("?")[0]);
+    const isJson = /\.json(?:\/|$|\?)/.test(url) || /\.json$/.test(url.split("/").pop().split("?")[0]);
     if (!isJs && !isJson) return {};
-    if (isEngineFile(url)) {
-      console.log(`[NumFuzz BG] スキップ(エンジン): ${fname}`);
+
+    if (isEngineFile(url)) return {};
+    if (isThirdPartyCdn(url)) return {}; // SRI付きサードパーティCDNは絶対スキップ
+
+    // ページオリジン（documentUrl）を取得してチェックの基準にする
+    // → ゲームページが有効かどうかを判定するため、リソースURLではなくページURLを使う
+    let pageOrigin = "";
+    try {
+      const docUrl = details.documentUrl || details.originUrl;
+      if (docUrl) pageOrigin = new URL(docUrl).origin;
+    } catch (_) {}
+
+    let reqOrigin = "";
+    try { reqOrigin = new URL(url).origin; } catch (_) {}
+
+    // センシティブサイト（検索エンジン・認証・決済等）はグローバル有効でも絶対スキップ
+    if (isSensitiveSite(pageOrigin) || isSensitiveSite(reqOrigin)) {
       return {};
     }
 
-    // ★ キャッシュで同期チェック：無効サイトはフィルタを一切作らない
-    //   → SRI 付きスクリプト(reCAPTCHA等)のバイト列に完全に無影響
-    let reqOrigin = "";
-    try {
-      reqOrigin = new URL(url).origin;
-    } catch (_) {}
-    if (!isEnabledForOrigin(reqOrigin)) {
-      return {}; // フィルタ不作成：ブラウザがレスポンスをそのまま受け取る
+    // クロスオリジンスクリプトはスキップ（明示的にnumFuzzSitesで有効化された場合のみ許可）
+    // → ゲームページが有効でもCDN上のサードパーティスクリプトは書き換えない
+    if (pageOrigin && reqOrigin && reqOrigin !== pageOrigin) {
+      const explicitlyEnabled = _settingsCache.numFuzzSites[reqOrigin];
+      if (explicitlyEnabled !== true) {
+        return {};
+      }
     }
 
+    // ★ キャッシュで同期チェック：無効サイトはフィルタを一切作らない
+    const checkOrigin = pageOrigin || reqOrigin;
+    if (!isEnabledForOrigin(checkOrigin)) {
+      return {};
+    }
+
+    const fname = url.split("/").pop().split("?")[0].toLowerCase();
     const filter = browser.webRequest.filterResponseData(details.requestId);
     const dec = new TextDecoder("utf-8");
     const enc = new TextEncoder();
     const chunks = [];
 
     filter.ondata = (e) => chunks.push(e.data);
-    filter.onerror = () => {};
+    filter.onerror = () => {
+      try { filter.disconnect(); } catch (_) {}
+    };
 
     filter.onstop = () => {
-      // バイト列 → 文字列
       let raw = "";
       for (const chunk of chunks) raw += dec.decode(chunk, { stream: true });
-      raw += dec.decode(); // flush
+      raw += dec.decode();
 
-      // ここまで来た時点でキャッシュによる有効チェック済み。
-      // storage から最新値を読み直して乗数を決定する。
       browser.storage.local
         .get({
           numFuzzEnabled: false,
@@ -184,11 +220,10 @@ browser.webRequest.onBeforeRequest.addListener(
         })
         .then((s) => {
           // onBeforeRequest 通過後に設定が変わった場合の二重確認
-          const siteOv = s.numFuzzSites[reqOrigin];
+          const siteOv = s.numFuzzSites[checkOrigin];
           const enabled = siteOv !== undefined ? siteOv : s.numFuzzEnabled;
 
           if (!enabled) {
-            // フィルター作成後に設定が無効に変わったケース（ほぼ起きないが安全策）
             filter.write(enc.encode(raw));
             filter.disconnect();
             return;
