@@ -499,16 +499,9 @@ JSON.parse=function(text){
 console.log('[NumFuzz] フック設置完了 (設定読み込み待機中)');
 })();`;
 
-  // Phase 1 を同期的に注入
-  const hookEl = document.createElement("script");
-  hookEl.textContent = HOOK_SCRIPT;
-  (document.head || document.documentElement).appendChild(hookEl);
-  hookEl.remove();
-
   // ================================================================
-  //  Phase 2: ストレージから設定を読み込み乗数を注入する（非同期）
-  //  フックはすでに設置済みなので、この完了を待たずにJSが
-  //  読み込まれても問題ない。乗数がセットされた瞬間から有効になる。
+  //  ストレージから設定を読み込み、有効な場合のみフック+乗数を注入
+  //  無効サイトには一切介入しない
   // ================================================================
 
   const RANGES = [
@@ -537,7 +530,12 @@ console.log('[NumFuzz] フック設置完了 (設定読み込み待機中)');
     const mult = rMin + Math.random() * (rMax - rMin);
     const prob = Number(s.numFuzzProb);
 
-    // 乗数を page context に注入して有効化
+    // 有効サイトのみ: フックを注入してから乗数を有効化
+    const hookEl = document.createElement("script");
+    hookEl.textContent = HOOK_SCRIPT;
+    (document.head || document.documentElement).appendChild(hookEl);
+    hookEl.remove();
+
     const cfgEl = document.createElement("script");
     cfgEl.textContent =
       `window.__numFuzzMult=${mult};` +
