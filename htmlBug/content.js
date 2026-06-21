@@ -20,8 +20,14 @@
   let enableText = true; // テキストグリッチ
   let enableShuffle = false; // 要素シャッフル（デフォルト無効）
   let enableBlur = false; // ブラー処理（デフォルト無効）
-  let enableImgSwap = true; // 画像差る替え（デフォルト有効）
+  let enableImgSwap = true; // 画像差し替え（デフォルト有効）
   let enableJsChaos = false; // JS定数バグ（デフォルト無効）
+
+  // ---- 外部画像差し替え設定 ----------------------------------------
+  // 各画像が外部画像に差し替わる確率（0.0〜1.0）
+  const externalImgChance = 0.25;
+  // 外部画像のベースURL（末尾に ?_=ユニーク値 を付与してキャッシュを回避）
+  const externalImgBase = "https://picsum.photos/640/480";
 
   // ---- CSS カオス処理 -----------------------------------------------
 
@@ -152,38 +158,53 @@
   // グリッチ時に混入するカスタムワード一覧
   let glitchWords = [];
 
-  // ---- 画像差る替え -----------------------------------------------
+  // ---- 画像差し替え -----------------------------------------------
 
   /**
-   * ページ上の画像のURLを互いにシャッフルして入れ替える
+   * ページ上の画像を差し替える
+   * - 一定確率で外部画像に差し替え
+   * - 残りはページ内の画像URLをシャッフルして入れ替え
    */
   function swapImages() {
     const imgs = [...document.querySelectorAll("img")].filter(
       (el) => !el.closest(".chaos-spawned") && el.src,
     );
-    if (imgs.length < 2) return;
+    if (imgs.length === 0) return;
 
-    // 現在のsrcを収集
-    const srcs = imgs.map((img) => img.src);
+    const shufflePool = [];
 
-    // Fisher-Yates シャッフル（元の位置と同じにならないよう最低1サイクル保証）
+    let externalCounter = 0;
+    for (const img of imgs) {
+      if (Math.random() < externalImgChance) {
+        // 外部画像に差し替え（?_= でキャッシュを回避し、画像ごとに異なる写真を取得）
+        img.removeAttribute("srcset");
+        img.removeAttribute("sizes");
+        img.src = `${externalImgBase}?_=${Date.now()}_${externalCounter++}`;
+      } else {
+        shufflePool.push(img);
+      }
+    }
+
+    // 残りの画像をURLシャッフルで入れ替え
+    if (shufflePool.length < 2) return;
+
+    const srcs = shufflePool.map((img) => img.src);
     const shuffled = [...srcs];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = randInt(0, i - 1);
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
 
-    // 全要素が元と同じURLのままだった場合は先頭2枚を強制スワップ
+    // 全要素が偶然元と同じURLになった場合は先頭2枚を強制スワップ
     const allSame = shuffled.every((s, i) => s === srcs[i]);
     if (allSame) {
       [shuffled[0], shuffled[1]] = [shuffled[1], shuffled[0]];
     }
 
-    // 入れ替えたURLを各imgに適用
-    for (let i = 0; i < imgs.length; i++) {
-      imgs[i].removeAttribute("srcset");
-      imgs[i].removeAttribute("sizes");
-      imgs[i].src = shuffled[i];
+    for (let i = 0; i < shufflePool.length; i++) {
+      shufflePool[i].removeAttribute("srcset");
+      shufflePool[i].removeAttribute("sizes");
+      shufflePool[i].src = shuffled[i];
     }
   }
 
