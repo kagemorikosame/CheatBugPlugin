@@ -155,60 +155,35 @@
   // ---- 画像差る替え -----------------------------------------------
 
   /**
-   * ランダムな彩色図形で構成したSVGをdata URIとして返す
-   */
-  function randomSvgDataUri(w, h) {
-    const bg = randColor();
-    const shapes = [];
-    const count = randInt(3, 8);
-    for (let i = 0; i < count; i++) {
-      const fill = randColor();
-      const opacity = rand(0.5, 1).toFixed(2);
-      const type = pick(["rect", "circle", "ellipse", "polygon"]);
-      if (type === "rect") {
-        shapes.push(
-          `<rect x="${randInt(0, w)}" y="${randInt(0, h)}" width="${randInt(10, w)}" height="${randInt(10, h)}" fill="${fill}" opacity="${opacity}"/>`,
-        );
-      } else if (type === "circle") {
-        const r = randInt(5, Math.max(10, Math.floor(Math.min(w, h) / 2)));
-        shapes.push(
-          `<circle cx="${randInt(0, w)}" cy="${randInt(0, h)}" r="${r}" fill="${fill}" opacity="${opacity}"/>`,
-        );
-      } else if (type === "ellipse") {
-        shapes.push(
-          `<ellipse cx="${randInt(0, w)}" cy="${randInt(0, h)}" rx="${randInt(5, Math.max(6, Math.floor(w / 2)))}" ry="${randInt(5, Math.max(6, Math.floor(h / 2)))}" fill="${fill}" opacity="${opacity}"/>`,
-        );
-      } else {
-        const pts = Array.from(
-          { length: randInt(4, 6) },
-          () => `${randInt(0, w)},${randInt(0, h)}`,
-        ).join(" ");
-        shapes.push(
-          `<polygon points="${pts}" fill="${fill}" opacity="${opacity}"/>`,
-        );
-      }
-    }
-    const svg =
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">` +
-      `<rect width="${w}" height="${h}" fill="${bg}"/>` +
-      shapes.join("") +
-      `</svg>`;
-    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
-  }
-
-  /**
-   * ページ上の画像をランダムSVGで差る替える
+   * ページ上の画像のURLを互いにシャッフルして入れ替える
    */
   function swapImages() {
     const imgs = [...document.querySelectorAll("img")].filter(
-      (el) => !el.closest(".chaos-spawned"),
+      (el) => !el.closest(".chaos-spawned") && el.src,
     );
-    for (const img of imgs) {
-      const w = Math.max(img.naturalWidth || img.offsetWidth || 200, 10);
-      const h = Math.max(img.naturalHeight || img.offsetHeight || 150, 10);
-      img.removeAttribute("srcset");
-      img.removeAttribute("sizes");
-      img.src = randomSvgDataUri(w, h);
+    if (imgs.length < 2) return;
+
+    // 現在のsrcを収集
+    const srcs = imgs.map((img) => img.src);
+
+    // Fisher-Yates シャッフル（元の位置と同じにならないよう最低1サイクル保証）
+    const shuffled = [...srcs];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = randInt(0, i - 1);
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    // 全要素が元と同じURLのままだった場合は先頭2枚を強制スワップ
+    const allSame = shuffled.every((s, i) => s === srcs[i]);
+    if (allSame) {
+      [shuffled[0], shuffled[1]] = [shuffled[1], shuffled[0]];
+    }
+
+    // 入れ替えたURLを各imgに適用
+    for (let i = 0; i < imgs.length; i++) {
+      imgs[i].removeAttribute("srcset");
+      imgs[i].removeAttribute("sizes");
+      imgs[i].src = shuffled[i];
     }
   }
 
