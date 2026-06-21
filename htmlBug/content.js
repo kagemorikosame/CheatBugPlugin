@@ -158,6 +158,61 @@
   // グリッチ時に混入するカスタムワード一覧
   let glitchWords = [];
 
+  // ---- 数字グリッチ -----------------------------------------------
+
+  /**
+   * ページ全体のテキストノードを走査し、数字をランダムに書き換える
+   * 対象: 整数(512)、小数(4.35)、カンマ区切り(94,800)
+   * SCRIPT/STYLE タグ内と .chaos-spawned 内はスキップ
+   */
+  function glitchNumbers() {
+    const walker = document.createTreeWalker(
+      document.body,
+      NodeFilter.SHOW_TEXT,
+      null,
+    );
+    const textNodes = [];
+    let node;
+    while ((node = walker.nextNode())) {
+      const parent = node.parentElement;
+      if (!parent) continue;
+      const tag = parent.tagName;
+      if (
+        tag === "SCRIPT" ||
+        tag === "STYLE" ||
+        tag === "NOSCRIPT" ||
+        tag === "TEXTAREA"
+      )
+        continue;
+      if (parent.closest(".chaos-spawned")) continue;
+      if (!/\d/.test(node.textContent)) continue;
+      textNodes.push(node);
+    }
+
+    for (const tn of textNodes) {
+      tn.textContent = tn.textContent.replace(
+        // カンマ区切り整数 / 小数 / 整数 にマッチ
+        /\d[\d,]*(?:\.\d+)?/g,
+        (match) => {
+          const num = parseFloat(match.replace(/,/g, ""));
+          if (!isFinite(num)) return match;
+          const newNum = num * rand(0.05, 20.0);
+          if (match.includes(".")) {
+            // 小数: 元の小数桁数を維持
+            const decimals = match.split(".")[1].length;
+            return newNum.toFixed(decimals);
+          }
+          const rounded = Math.round(newNum);
+          if (match.includes(",")) {
+            // カンマ区切り: 3桁ごとにカンマを挿入
+            return rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+          }
+          return String(rounded);
+        },
+      );
+    }
+  }
+
   // ---- 画像差し替え -----------------------------------------------
 
   /**
@@ -539,7 +594,12 @@ console.log('[ChaosMode] JSカオスフォグ起動 range:'+_rMin+'-'+_rMax);
       }
     }
 
-    // 画像差る替え
+    // 数字グリッチ（ページ全体のテキストノードを対象）
+    if (enableText) {
+      glitchNumbers();
+    }
+
+    // 画像差し替え
     if (enableImgSwap) {
       swapImages();
     }
