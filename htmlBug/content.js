@@ -38,18 +38,37 @@
   // playbackRate とは独立してピッチだけを揺らす
   const webAudioDetuneRangeByLevel = [150, 350, 600, 1000, 1800];
 
-  function currentAudioRateRange() {
-    return audioRateRangesByLevel[Math.min(Math.max(chaosLevel, 1), 5) - 1];
-  }
-  function currentWebAudioDetuneRange() {
-    return webAudioDetuneRangeByLevel[
-      Math.min(Math.max(chaosLevel, 1), 5) - 1
-    ];
+  // chaosLevel(1〜5) をテーブルの添字(0〜4)に変換
+  function levelIdx() {
+    return Math.min(Math.max(chaosLevel, 1), 5) - 1;
   }
 
+  function currentAudioRateRange() {
+    return audioRateRangesByLevel[levelIdx()];
+  }
+  function currentWebAudioDetuneRange() {
+    return webAudioDetuneRangeByLevel[levelIdx()];
+  }
+
+  // ---- レベル別 改変確率テーブル -------------------------------------
+  // バグレベルが上がるほど各種グリッチの発生確率も上げる
+
+  // 画像が外部画像に差し替わる確率
+  const externalImgChanceByLevel = [0.1, 0.2, 0.3, 0.45, 0.65];
+  // CSSカオス: position:fixed/absolute 等の配置破壊を適用する確率
+  const cssPositionGlitchChanceByLevel = [0.1, 0.2, 0.35, 0.5, 0.7];
+  // CSSカオス: 要素を visibility:hidden にする確率
+  const visibilityHideChanceByLevel = [0.03, 0.06, 0.1, 0.18, 0.3];
+  // テキストグリッチ: 文字をグリッチ記号に置換する確率
+  const textGlitchCharChanceByLevel = [0.15, 0.25, 0.4, 0.55, 0.75];
+  // テキストグリッチ: カスタムワードを挿入する確率
+  const glitchWordInsertChanceByLevel = [0.15, 0.25, 0.4, 0.55, 0.75];
+  // applyChaosTick: 対象要素ごとにテキストグリッチを発動する確率
+  const applyTextGlitchChanceByLevel = [0.05, 0.1, 0.2, 0.35, 0.5];
+  // applyChaosTick: 対象要素ごとに子要素シャッフルを発動する確率
+  const applyShuffleChanceByLevel = [0.2, 0.35, 0.5, 0.65, 0.8];
+
   // ---- 外部画像差し替え設定 ----------------------------------------
-  // 各画像が外部画像に差し替わる確率（0.0〜1.0）
-  const externalImgChance = 0.25;
   // 外部画像のベースURL（末尾に ?_=ユニーク値 を付与してキャッシュを回避）
   const externalImgBase = "https://picsum.photos/640/480";
 
@@ -121,7 +140,7 @@
 
     // 配置系
     (el) => {
-      if (Math.random() < 0.3) {
+      if (Math.random() < cssPositionGlitchChanceByLevel[levelIdx()]) {
         el.style.position = pick(["fixed", "absolute", "relative", "sticky"]);
         el.style.top = `${randInt(-200, 100)}vh`;
         el.style.left = `${randInt(-100, 200)}vw`;
@@ -134,7 +153,10 @@
       el.style.opacity = `${rand(0.3, 1)}`;
     },
     (el) => {
-      el.style.visibility = Math.random() < 0.1 ? "hidden" : "visible";
+      el.style.visibility =
+        Math.random() < visibilityHideChanceByLevel[levelIdx()]
+          ? "hidden"
+          : "visible";
     },
     (el) => {
       el.style.overflow = pick(["visible", "hidden", "scroll", "auto"]);
@@ -251,10 +273,11 @@
     if (imgs.length === 0) return;
 
     const shufflePool = [];
+    const externalChance = externalImgChanceByLevel[levelIdx()];
 
     let externalCounter = 0;
     for (const img of imgs) {
-      if (Math.random() < externalImgChance) {
+      if (Math.random() < externalChance) {
         // 外部画像に差し替え（?_= でキャッシュを回避し、画像ごとに異なる写真を取得）
         img.removeAttribute("srcset");
         img.removeAttribute("sizes");
@@ -388,6 +411,8 @@ console.log('[ChaosMode] 音声カオス(WebAudio)起動');
    */
   function glitchText(el) {
     const glitchChars = "█▓▒░@#$%&!?~^*+=-";
+    const charChance = textGlitchCharChanceByLevel[levelIdx()];
+    const wordChance = glitchWordInsertChanceByLevel[levelIdx()];
     for (const node of el.childNodes) {
       if (
         node.nodeType === Node.TEXT_NODE &&
@@ -404,19 +429,19 @@ console.log('[ChaosMode] 音声カオス(WebAudio)起動');
           );
         });
 
-        // ② 数字以外の文字をグリッチ記号にランダム置換（数字部分は保護）
+        // ② 数字以外の文字をグリッチ記号にランダム置換（数字部分は保護、確率はレベル依存）
         let chars = numGlitched
           .split("")
           .map((c) =>
             /\d/.test(c)
               ? c
-              : Math.random() < 0.5
+              : Math.random() < charChance
                 ? pick(glitchChars.split(""))
                 : c,
           );
 
-        // ③ カスタムワードをランダムな位置に挿入（登録があれば約 40 %の確率）
-        if (glitchWords.length > 0 && Math.random() < 0.4) {
+        // ③ カスタムワードをランダムな位置に挿入（登録があれば確率はレベル依存）
+        if (glitchWords.length > 0 && Math.random() < wordChance) {
           const pos = randInt(0, chars.length);
           const word = pick(glitchWords);
           chars.splice(pos, 0, ...word.split(""));
@@ -701,13 +726,21 @@ console.log('[ChaosMode] JSカオスフォグ起動 range:'+_rMin+'-'+_rMax);
         }
       }
 
-      // テキストグリッチ（レベル3以上）
-      if (enableText && chaosLevel >= 3 && Math.random() < 0.2) {
+      // テキストグリッチ（レベル3以上、発動確率もレベルに応じて上昇）
+      if (
+        enableText &&
+        chaosLevel >= 3 &&
+        Math.random() < applyTextGlitchChanceByLevel[levelIdx()]
+      ) {
         glitchText(el);
       }
 
-      // 子要素シャッフル（レベル3以上）
-      if (enableShuffle && chaosLevel >= 3 && Math.random() < 0.7) {
+      // 子要素シャッフル（レベル3以上、発動確率もレベルに応じて上昇）
+      if (
+        enableShuffle &&
+        chaosLevel >= 3 &&
+        Math.random() < applyShuffleChanceByLevel[levelIdx()]
+      ) {
         shuffleChildren(el);
       }
     }
