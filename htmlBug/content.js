@@ -22,6 +22,30 @@
   let enableBlur = false; // ブラー処理（デフォルト無効）
   let enableImgSwap = true; // 画像差し替え（デフォルト有効）
   let enableJsChaos = false; // JS定数バグ（デフォルト無効）
+  let enableAudioChaos = true; // 音声ピッチ・速度ランダム化（デフォルト有効）
+
+  // ---- 音声ピッチ・速度ランダム化設定 --------------------------------
+  // 再生速度（ピッチも連動して変化）の変動範囲（<audio>/<video> 要素・
+  // Web Audio API 共通、バグレベルが上がるほど極端になる）
+  const audioRateRangesByLevel = [
+    [0.85, 1.2], // level 1: 穏やか
+    [0.7, 1.5], // level 2
+    [0.5, 2.0], // level 3
+    [0.3, 2.8], // level 4
+    [0.15, 4.0], // level 5: 激烈
+  ];
+  // Web Audio API の detune（セント単位、100=半音1つ分）変動幅
+  // playbackRate とは独立してピッチだけを揺らす
+  const webAudioDetuneRangeByLevel = [150, 350, 600, 1000, 1800];
+
+  function currentAudioRateRange() {
+    return audioRateRangesByLevel[Math.min(Math.max(chaosLevel, 1), 5) - 1];
+  }
+  function currentWebAudioDetuneRange() {
+    return webAudioDetuneRangeByLevel[
+      Math.min(Math.max(chaosLevel, 1), 5) - 1
+    ];
+  }
 
   // ---- 外部画像差し替え設定 ----------------------------------------
   // 各画像が外部画像に差し替わる確率（0.0〜1.0）
@@ -261,6 +285,100 @@
       shufflePool[i].removeAttribute("sizes");
       shufflePool[i].src = shuffled[i];
     }
+  }
+
+  // ---- 音声ピッチ・速度カオス ---------------------------------------
+
+  /**
+   * 音声/動画要素にランダムな再生速度を設定
+   * preservesPitch を無効化することで、速度変化にピッチも連動させる
+   */
+  function glitchAudioElement(el) {
+    if (!enableAudioChaos) return;
+    const [rMin, rMax] = currentAudioRateRange();
+    try {
+      el.playbackRate = rand(rMin, rMax);
+      el.preservesPitch = false;
+      el.mozPreservesPitch = false;
+      el.webkitPreservesPitch = false;
+    } catch (_) {
+      /* 無視 */
+    }
+  }
+
+  /**
+   * Web Audio API (AudioBufferSourceNode) 経由の再生をフックし、
+   * playbackRate（速度）と detune（ピッチ）をランダム化する。
+   * ゲームなどは <audio> タグを使わず AudioContext.createBufferSource()
+   * で直接デコード・再生することが多く、その場合は上記の
+   * glitchAudioElement では一切効果がないため、こちらが必要になる。
+   * ページの JS 実行コンテキストに注入し、AudioBufferSourceNode.prototype.start
+   * を上書きすることで、生成方法（createBufferSource / new コンストラクタ）
+   * によらず start() 呼び出し直前に値を設定する。
+   */
+  function startWebAudioChaos() {
+    const [rMin, rMax] = currentAudioRateRange();
+    const detuneMax = currentWebAudioDetuneRange();
+    injectPageScript(`
+(function(){"use strict";
+// バグレベルはボタンを押すたびに変わりうるため、レンジは毎回グローバルに書き込み直す
+// (start の上書き自体は一度きり、レンジ参照はそこから常に最新値を読む)
+window.__chaosModeAudioRange={rMin:${rMin},rMax:${rMax},detuneMax:${detuneMax}};
+if(window.__chaosModeAudioActive)return;
+window.__chaosModeAudioActive=true;
+if(typeof AudioBufferSourceNode==='undefined')return;
+var proto=AudioBufferSourceNode.prototype;
+var _origStart=proto.start;
+proto.start=function(){
+  try{
+    var r=window.__chaosModeAudioRange||{rMin:0.85,rMax:1.2,detuneMax:150};
+    if(this.playbackRate)this.playbackRate.value=r.rMin+Math.random()*(r.rMax-r.rMin);
+    if(this.detune)this.detune.value=(Math.random()*2-1)*r.detuneMax;
+  }catch(e){}
+  return _origStart.apply(this,arguments);
+};
+console.log('[ChaosMode] 音声カオス(WebAudio)起動');
+})();
+`);
+  }
+
+  let audioChaosStarted = false;
+
+  /**
+   * 音声カオス起動
+   *   1. 既存の audio / video 要素にランダムなピッチ・速度を適用
+   *   2. 再生開始のたびに再ランダム化（play イベントをキャプチャで捕捉）
+   *   3. 動的に追加される audio / video 要素も MutationObserver で検知
+   *   4. Web Audio API (AudioBufferSourceNode) をフックしてピッチ・速度を変化
+   */
+  function startAudioChaos() {
+    document.querySelectorAll("audio,video").forEach(glitchAudioElement);
+    startWebAudioChaos();
+
+    if (audioChaosStarted) return;
+    audioChaosStarted = true;
+
+    document.addEventListener(
+      "play",
+      (e) => {
+        if (e.target instanceof HTMLMediaElement) glitchAudioElement(e.target);
+      },
+      true,
+    );
+
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          if (node.matches?.("audio,video")) glitchAudioElement(node);
+          node.querySelectorAll?.("audio,video").forEach(glitchAudioElement);
+        }
+      }
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
   }
 
   /**
@@ -614,6 +732,7 @@ console.log('[ChaosMode] JSカオスフォグ起動 range:'+_rMin+'-'+_rMax);
     chaosLevel = Math.max(1, Math.min(5, level ?? chaosLevel));
     applyChaosTick();
     if (enableJsChaos) startJsChaosFuzz();
+    if (enableAudioChaos) startAudioChaos();
     isApplied = true;
   }
 
@@ -635,6 +754,8 @@ console.log('[ChaosMode] JSカオスフォグ起動 range:'+_rMin+'-'+_rMax);
         if (typeof msg.blur === "boolean") enableBlur = msg.blur;
         if (typeof msg.imgSwap === "boolean") enableImgSwap = msg.imgSwap;
         if (typeof msg.jsChaos === "boolean") enableJsChaos = msg.jsChaos;
+        if (typeof msg.audioChaos === "boolean")
+          enableAudioChaos = msg.audioChaos;
         startChaos(msg.level);
         return Promise.resolve({ status: "applied" });
       case "reset":
@@ -650,6 +771,7 @@ console.log('[ChaosMode] JSカオスフォグ起動 range:'+_rMin+'-'+_rMax);
           enableBlur,
           enableImgSwap,
           enableJsChaos,
+          enableAudioChaos,
           glitchWords,
         });
       default:
