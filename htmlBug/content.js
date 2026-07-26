@@ -67,6 +67,14 @@
   const applyTextGlitchChanceByLevel = [0.05, 0.1, 0.2, 0.35, 0.5];
   // applyChaosTick: 対象要素ごとに子要素シャッフルを発動する確率
   const applyShuffleChanceByLevel = [0.2, 0.35, 0.5, 0.65, 0.8];
+  // CSSカオス: 数値プロパティが変更される際、通常範囲ではなく
+  // 大幅に歪んだ極端な範囲の値を使う確率（プロパティ変更ごとに個別判定）
+  const extremeDistortChanceByLevel = [0.25, 0.4, 0.6, 0.8, 0.95];
+
+  // CSSの値変更時、極端な歪み範囲を使うかどうかを判定
+  function isExtremeDistort() {
+    return Math.random() < extremeDistortChanceByLevel[levelIdx()];
+  }
 
   // ---- 外部画像差し替え設定 ----------------------------------------
   // 外部画像のベースURL（末尾に ?_=ユニーク値 を付与してキャッシュを回避）
@@ -86,27 +94,41 @@
       el.style.borderColor = randColor();
     },
     (el) => {
-      el.style.outline = `${randInt(1, 8)}px solid ${randColor()}`;
+      el.style.outline = isExtremeDistort()
+        ? `${randInt(9, 60)}px solid ${randColor()}`
+        : `${randInt(1, 8)}px solid ${randColor()}`;
     },
 
-    // サイズ系
+    // サイズ系（歪み判定が当たると通常より大幅に極端な値になる）
     (el) => {
-      el.style.fontSize = `${rand(0.3, 4)}em`;
+      el.style.fontSize = isExtremeDistort()
+        ? `${rand(0.02, 14)}em`
+        : `${rand(0.3, 4)}em`;
     },
     (el) => {
-      el.style.width = `${randInt(10, 300)}%`;
+      el.style.width = isExtremeDistort()
+        ? `${randInt(1, 900)}%`
+        : `${randInt(10, 300)}%`;
     },
     (el) => {
-      el.style.height = `${randInt(10, 500)}px`;
+      el.style.height = isExtremeDistort()
+        ? `${randInt(1, 3000)}px`
+        : `${randInt(10, 500)}px`;
     },
     (el) => {
-      el.style.padding = `${randInt(0, 60)}px`;
+      el.style.padding = isExtremeDistort()
+        ? `${randInt(0, 500)}px`
+        : `${randInt(0, 60)}px`;
     },
     (el) => {
-      el.style.margin = `${randInt(-30, 80)}px`;
+      el.style.margin = isExtremeDistort()
+        ? `${randInt(-400, 800)}px`
+        : `${randInt(-30, 80)}px`;
     },
     (el) => {
-      el.style.borderWidth = `${randInt(0, 20)}px`;
+      el.style.borderWidth = isExtremeDistort()
+        ? `${randInt(21, 120)}px`
+        : `${randInt(0, 20)}px`;
     },
     (el) => {
       el.style.borderStyle = pick([
@@ -119,19 +141,24 @@
       ]);
     },
     (el) => {
-      el.style.letterSpacing = `${rand(-2, 10)}px`;
+      el.style.letterSpacing = isExtremeDistort()
+        ? `${rand(-30, 80)}px`
+        : `${rand(-2, 10)}px`;
     },
     (el) => {
-      el.style.lineHeight = `${rand(0.5, 4)}`;
+      el.style.lineHeight = isExtremeDistort()
+        ? `${rand(0.05, 12)}`
+        : `${rand(0.5, 4)}`;
     },
 
-    // 変形系
+    // 変形系（歪み判定が当たると回転・拡縮・せん断が大幅に極端化する）
     (el) => {
-      const rotate = rand(-180, 180);
-      const scaleX = rand(0.1, 3);
-      const scaleY = rand(0.1, 3);
-      const skewX = rand(-45, 45);
-      const skewY = rand(-45, 45);
+      const extreme = isExtremeDistort();
+      const rotate = extreme ? rand(-1440, 1440) : rand(-180, 180);
+      const scaleX = extreme ? rand(0.01, 12) : rand(0.1, 3);
+      const scaleY = extreme ? rand(0.01, 12) : rand(0.1, 3);
+      const skewX = extreme ? rand(-89, 89) : rand(-45, 45);
+      const skewY = extreme ? rand(-89, 89) : rand(-45, 45);
       el.style.transform = `rotate(${rotate}deg) scale(${scaleX},${scaleY}) skew(${skewX}deg,${skewY}deg)`;
     },
     (el) => {
