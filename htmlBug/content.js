@@ -37,6 +37,11 @@
   // Web Audio API の detune（セント単位、100=半音1つ分）変動幅
   // playbackRate とは独立してピッチだけを揺らす
   const webAudioDetuneRangeByLevel = [150, 350, 600, 1000, 1800];
+  // 再生中の音声（<audio>/<video> と WebAudio ソース両方）を一定間隔ごとに
+  // 再チェックし、ピッチ・速度を再ランダム化する確率（tickごとの判定）
+  // バグレベルが上がるほど再生中の変化が頻繁になる
+  const audioReglitchChanceByLevel = [0.15, 0.3, 0.5, 0.7, 0.9];
+  const audioReglitchIntervalMs = 500; // 再チェック間隔
 
   // chaosLevel(1〜5) をテーブルの添字(0〜4)に変換
   function levelIdx() {
@@ -369,24 +374,44 @@
   function startWebAudioChaos() {
     const [rMin, rMax] = currentAudioRateRange();
     const detuneMax = currentWebAudioDetuneRange();
+    const reglitchChance = audioReglitchChanceByLevel[levelIdx()];
     injectPageScript(`
 (function(){"use strict";
-// バグレベルはボタンを押すたびに変わりうるため、レンジは毎回グローバルに書き込み直す
-// (start の上書き自体は一度きり、レンジ参照はそこから常に最新値を読む)
+// バグレベルはボタンを押すたびに変わりうるため、レンジ・確率は毎回グローバルに書き込み直す
+// (start の上書き・interval の作成自体は一度きり、参照はそこから常に最新値を読む)
 window.__chaosModeAudioRange={rMin:${rMin},rMax:${rMax},detuneMax:${detuneMax}};
+window.__chaosModeAudioReglitchChance=${reglitchChance};
 if(window.__chaosModeAudioActive)return;
 window.__chaosModeAudioActive=true;
 if(typeof AudioBufferSourceNode==='undefined')return;
 var proto=AudioBufferSourceNode.prototype;
 var _origStart=proto.start;
-proto.start=function(){
+// 再生中（start 済み・まだ ended していない）ソースノードを追跡し、
+// 再生途中でもピッチ・速度を再ランダム化できるようにする
+var _liveNodes=new Set();
+function fuzzNode(node){
   try{
     var r=window.__chaosModeAudioRange||{rMin:0.85,rMax:1.2,detuneMax:150};
-    if(this.playbackRate)this.playbackRate.value=r.rMin+Math.random()*(r.rMax-r.rMin);
-    if(this.detune)this.detune.value=(Math.random()*2-1)*r.detuneMax;
+    if(node.playbackRate)node.playbackRate.value=r.rMin+Math.random()*(r.rMax-r.rMin);
+    if(node.detune)node.detune.value=(Math.random()*2-1)*r.detuneMax;
+  }catch(e){}
+}
+proto.start=function(){
+  fuzzNode(this);
+  _liveNodes.add(this);
+  var self=this;
+  try{
+    self.addEventListener('ended',function(){_liveNodes.delete(self);});
   }catch(e){}
   return _origStart.apply(this,arguments);
 };
+setInterval(function(){
+  var chance=window.__chaosModeAudioReglitchChance;
+  if(typeof chance!=='number')return;
+  _liveNodes.forEach(function(node){
+    if(Math.random()<chance)fuzzNode(node);
+  });
+},${audioReglitchIntervalMs});
 console.log('[ChaosMode] 音声カオス(WebAudio)起動');
 })();
 `);
@@ -400,6 +425,8 @@ console.log('[ChaosMode] 音声カオス(WebAudio)起動');
    *   2. 再生開始のたびに再ランダム化（play イベントをキャプチャで捕捉）
    *   3. 動的に追加される audio / video 要素も MutationObserver で検知
    *   4. Web Audio API (AudioBufferSourceNode) をフックしてピッチ・速度を変化
+   *   5. 再生中の要素・ソースノードを一定間隔で再チェックし、
+   *      途中経過でもピッチ・速度が変化するようにする
    */
   function startAudioChaos() {
     document.querySelectorAll("audio,video").forEach(glitchAudioElement);
@@ -429,6 +456,16 @@ console.log('[ChaosMode] 音声カオス(WebAudio)起動');
       childList: true,
       subtree: true,
     });
+
+    // 再生中の <audio>/<video> を一定間隔で再チェックし、途中でも変化させる
+    setInterval(() => {
+      if (!enableAudioChaos) return;
+      const chance = audioReglitchChanceByLevel[levelIdx()];
+      document.querySelectorAll("audio,video").forEach((el) => {
+        if (el.paused || el.ended) return;
+        if (Math.random() < chance) glitchAudioElement(el);
+      });
+    }, audioReglitchIntervalMs);
   }
 
   /**
