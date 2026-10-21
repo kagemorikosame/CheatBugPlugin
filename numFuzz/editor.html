@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>NumFuzz ルール編集</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      body {
+        font-family: "Segoe UI", sans-serif;
+        background: #0d1117;
+        color: #cdd9e5;
+        font-size: 14px;
+      }
+
+      header {
+        background: linear-gradient(135deg, #e65c00, #f9d423);
+        padding: 14px 24px;
+        color: #0d1117;
+      }
+      header h1 { font-size: 1.3rem; letter-spacing: 3px; font-weight: 800; }
+      header p { font-size: 0.8rem; color: rgba(0,0,0,0.6); margin-top: 2px; word-break: break-all; }
+
+      main { max-width: 980px; margin: 0 auto; padding: 16px; }
+
+      .section {
+        background: #161b22;
+        border: 1px solid #21262d;
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin-bottom: 16px;
+      }
+      .section-title {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        color: #8b949e;
+        margin-bottom: 8px;
+      }
+      .hint { font-size: 0.78rem; color: #8b949e; line-height: 1.6; margin-bottom: 10px; }
+      .hint strong { color: #f9d423; font-weight: 600; }
+
+      table { width: 100%; border-collapse: collapse; }
+      th {
+        text-align: left;
+        font-size: 0.72rem;
+        color: #8b949e;
+        font-weight: 600;
+        padding: 6px 6px;
+        border-bottom: 1px solid #30363d;
+        white-space: nowrap;
+      }
+      td { padding: 5px 6px; border-bottom: 1px solid #21262d; vertical-align: middle; }
+      td.num { font-family: Consolas, monospace; }
+      td.muted { color: #8b949e; font-size: 0.8rem; word-break: break-all; }
+      td.nowrap { white-space: nowrap; word-break: normal; }
+
+      input[type=text], select {
+        background: #0d1117;
+        color: #cdd9e5;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 5px 8px;
+        font-size: 0.85rem;
+        width: 100%;
+        outline: none;
+      }
+      input[type=text]:focus, select:focus { border-color: #e65c00; }
+      input.invalid { border-color: #ff6b6b; }
+      input[type=checkbox] { accent-color: #e65c00; width: 16px; height: 16px; cursor: pointer; }
+
+      button {
+        background: #21262d;
+        color: #cdd9e5;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 5px 10px;
+        font-size: 0.8rem;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      button:hover { border-color: #e65c00; }
+      button.primary { background: #e65c00; border-color: #e65c00; color: #0d1117; font-weight: 600; }
+      button.danger:hover { border-color: #ff6b6b; color: #ff6b6b; }
+
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+      .row input[type=text] { flex: 1; min-width: 180px; }
+      .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+      .tabs button.active { background: #e65c00; border-color: #e65c00; color: #0d1117; }
+
+      #rules-empty, #scan-empty { color: #8b949e; font-size: 0.85rem; padding: 10px 0; }
+      #scan-files { font-size: 0.78rem; color: #8b949e; margin-bottom: 10px; line-height: 1.6; }
+      #scan-total { font-size: 0.75rem; color: #8b949e; margin: 6px 0; }
+      #save-state { font-size: 0.75rem; color: #8b949e; margin-left: auto; }
+      .key-chip {
+        display: inline-block;
+        background: #21262d;
+        border-radius: 10px;
+        padding: 1px 7px;
+        margin: 1px 2px;
+        font-size: 0.72rem;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>NumFuzz ルール編集</h1>
+      <p id="origin">読み込み中…</p>
+    </header>
+
+    <main>
+      <div class="section">
+        <div class="section-title">置き換えルール（このサイトのみ）</div>
+        <p class="hint">
+          <strong>値</strong>：JS・JSON と Unity の C# コード内で「元の値」と一致する数値を「新しい値」にします。<br />
+          <strong>キー</strong>：JSON のキー名や JS の <code>name: 100</code> / <code>name = 100</code> の値を「新しい値」にします。<br />
+          <strong>C#</strong>：Unity の C# メソッド内の特定の定数を「新しい値」にします（下の検出値「C# (Unity)」から追加）。<br />
+          ルールに当てはまった値はランダム書き換えより優先されます。<strong>C#整数</strong> は値ルールを C# コード内の整数にも適用します。<br />
+          Unity では、名前の分かるゲームの C# メソッド（Assembly-CSharp）以外（エンジン・ライブラリ）は書き換えません。<br />
+          変更はゲームページを<strong>リロード</strong>すると反映されます。
+        </p>
+        <div class="row">
+          <button id="add-value" class="primary">＋ 値ルール</button>
+          <button id="add-key" class="primary">＋ キールール</button>
+          <span id="save-state"></span>
+        </div>
+        <table id="rules-table">
+          <thead>
+            <tr>
+              <th>有効</th>
+              <th>種類</th>
+              <th>元の値 / キー名</th>
+              <th>新しい値</th>
+              <th>C#整数</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="rules-body"></tbody>
+        </table>
+        <div id="rules-empty">ルールはまだありません。</div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">実行中の変数（Unity・プレイ中に直接変更）</div>
+        <p class="hint">
+          プレイ中のゲームのメモリから C# の変数（クラスのフィールド）を読み取り、その場で書き換えます。リロードは不要です。<br />
+          名前はゲームのコードと同じです（例: <code>playerStatus.clearCount</code> は <code>playerStatus.GetClearCount()</code> が返す値）。
+          <strong>固定</strong> にすると、ゲームが値を変えても書き戻し続けます。<br />
+          ゲームがセーブすると書き換えた値も保存されます。ゲームのページを再読み込みすると固定は解除されます。
+        </p>
+        <div class="row">
+          <button id="live-scan" class="primary">変数を読み込む</button>
+          <label class="hint" style="margin:0"><input type="checkbox" id="live-auto" checked /> 値を自動更新</label>
+          <input type="text" id="live-query" placeholder="変数名で絞り込み（例: money, clearCount）" />
+        </div>
+        <div id="live-status" class="hint"></div>
+        <table>
+          <thead id="live-head"></thead>
+          <tbody id="live-body"></tbody>
+        </table>
+      </div>
+
+      <div class="section">
+        <div class="section-title">検出値（最後の読み込み時・書き換え前の値）</div>
+        <p class="hint">
+          NumFuzz が有効なサイトで読み込まれた JS・JSON の数値と、Unity のゲームの C# メソッド内の定数です。値・キー名・メソッド名で検索し、「＋」でルールに追加できます。
+        </p>
+        <div class="row">
+          <button id="reload">ページを再読み込みして検出</button>
+          <button id="refresh">一覧を更新</button>
+        </div>
+        <div id="scan-files"></div>
+        <div class="row">
+          <div class="tabs" id="kind-tabs">
+            <button data-kind="json" class="active">JSON</button>
+            <button data-kind="js">JS</button>
+            <button data-kind="wasm">C# (Unity)</button>
+          </div>
+          <input type="text" id="query" placeholder="値 または キー名・パス・メソッド名・変数名で検索" />
+        </div>
+        <div id="wasm-options" class="hint" style="display:none">
+          <label><input type="checkbox" id="named-only" checked /> おすすめのみ表示（変数名・引数名が分かる数値）</label><br />
+          「意味（推定）」は wasm の命令から推定した C# 側の使われ方です（<code>this.money = ●</code> はフィールドへの代入、
+          <code>PlayerPrefs.GetInt("Money", ▶defaultValue)</code> は引数、<code>ローカル変数（≒ Random.Range()） &lt;= ●</code> は if 文などの比較）。
+          コルーチンの内部状態やオブジェクトの参照など、変えるとゲームが壊れる値は表示しません。<br />
+          おすすめ以外（意味が「（不明）」「ローカル変数」のもの）はループの回数などの可能性があり、変えるとゲームが止まることがあります。
+        </div>
+        <div id="scan-total"></div>
+        <table>
+          <thead id="scan-head"></thead>
+          <tbody id="scan-body"></tbody>
+        </table>
+        <div id="scan-empty"></div>
+      </div>
+    </main>
+
+    <script src="common.js"></script>
+    <script src="editor.js"></script>
+  </body>
+</html>

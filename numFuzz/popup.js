@@ -5,6 +5,7 @@
 "use strict";
 
 const toggleEnable    = document.getElementById("toggle-enable");
+const toggleWasm      = document.getElementById("toggle-wasm");
 const sliderLevel     = document.getElementById("slider-level");
 const sliderProb      = document.getElementById("slider-prob");
 const valLevel        = document.getElementById("val-level");
@@ -16,8 +17,13 @@ const levelDesc       = document.getElementById("level-desc");
 const currentOriginEl = document.getElementById("current-origin");
 const siteModeEl      = document.getElementById("site-mode");
 const siteBadge       = document.getElementById("site-badge");
+const toggleRandom    = document.getElementById("toggle-random");
+const rulesInfo       = document.getElementById("rules-info");
+const openEditorBtn   = document.getElementById("open-editor");
 
 let currentOrigin = null;
+let currentTabId  = null;
+let rulesCount    = 0;
 
 const LEVEL_DESCS = [
   "Lv1 — ±10%　わずかなズレ",
@@ -26,19 +32,6 @@ const LEVEL_DESCS = [
   "Lv4 — ×0.2〜5.0　大幅な変動",
   "Lv5 — ×0.01〜10　ほぼランダム",
 ];
-
-const RANGES = [
-  [0.9,  1.1 ],
-  [0.7,  1.5 ],
-  [0.5,  2.0 ],
-  [0.2,  5.0 ],
-  [0.01, 10.0],
-];
-
-function genNextMult(level) {
-  const [rMin, rMax] = RANGES[Math.min(level, 5) - 1];
-  return rMin + Math.random() * (rMax - rMin);
-}
 
 // ---- UI 更新 -------------------------------------------------------
 
@@ -49,16 +42,22 @@ function updateLevelDesc(lv) {
 /**
  * グローバル設定とサイト別設定を受け取り、実効状態を表示する
  */
-function updateStatus(globalEnabled, sites, mult, url) {
-  const effective = getEffectiveEnabled(globalEnabled, sites);
+function updateStatus(settings) {
+  const sensitive = currentOrigin && isSensitiveSite(currentOrigin);
+  const effective = !sensitive && isEnabledFor(settings, currentOrigin || "");
   if (effective) {
     statusDot.classList.add("active");
-    statusText.textContent = "有効（次のリロードから適用）";
+    statusText.textContent = settings.numFuzzRandom
+      ? "有効（次のリロードから適用）"
+      : rulesCount ? "有効（ルールのみ）" : "有効（検出のみ）";
   } else {
     statusDot.classList.remove("active");
-    statusText.textContent = "無効";
+    statusText.textContent = sensitive ? "無効（保護対象サイト）" : "無効";
   }
-  if (mult) {
+}
+
+function updateLastMult(mult, url) {
+  if (typeof mult === "number") {
     fuzzInfo.textContent = "前回 ×" + mult.toFixed(4);
     fuzzInfo.title = url || "";
   } else {
@@ -67,23 +66,14 @@ function updateStatus(globalEnabled, sites, mult, url) {
 }
 
 /**
- * サイト別オーバーライドを考慮した実効 enabled 値を返す
- */
-function getEffectiveEnabled(globalEnabled, sites) {
-  if (currentOrigin && currentOrigin in sites) {
-    return sites[currentOrigin];
-  }
-  return globalEnabled;
-}
-
-/**
  * サイトバッジ（グローバル/カスタム有効/カスタム無効）を更新する
  */
-function updateSiteBadge(sites) {
+function updateSiteBadge(settings) {
+  const sites = settings.numFuzzSites;
   if (!currentOrigin || !(currentOrigin in sites)) {
-    // 未設定サイトはデフォルト無効として表示
-    siteBadge.textContent = "このサイト: 未設定（デフォルト無効）";
-    siteBadge.className = "off";
+    const g = settings.numFuzzEnabled;
+    siteBadge.textContent = "グローバル設定を使用中（" + (g ? "有効" : "無効") + "）";
+    siteBadge.className = "";
   } else if (sites[currentOrigin]) {
     siteBadge.textContent = "このサイト: カスタム有効";
     siteBadge.className = "on";
@@ -95,45 +85,47 @@ function updateSiteBadge(sites) {
 
 // ---- 初期化（タブURL取得 → ストレージ読み込み） --------------------
 
+function updateRulesInfo(settings) {
+  const list = (currentOrigin && settings.numFuzzRules[currentOrigin]) || [];
+  rulesCount = list.filter((r) => r.enabled).length;
+  rulesInfo.textContent = list.length
+    ? `このサイトのルール: ${list.length}件（有効 ${rulesCount}件）`
+    : "このサイトのルール: なし";
+}
+
 browser.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
-  if (tabs[0] && tabs[0].url) {
-    try {
-      const u = new URL(tabs[0].url);
-      // file: の場合 origin が "null" になるので hostname を使う
-      currentOrigin = (u.origin && u.origin !== "null") ? u.origin : u.protocol + "//" + u.hostname;
-      currentOriginEl.textContent = currentOrigin;
-    } catch (_) {
-      currentOriginEl.textContent = "取得できませんでした";
-    }
-  } else {
-    currentOriginEl.textContent = "取得できませんでした";
+  currentTabId  = tabs[0] ? tabs[0].id : null;
+  currentOrigin = tabs[0] && tabs[0].url ? originKey(tabs[0].url) : "";
+  currentOriginEl.textContent = currentOrigin || "取得できませんでした";
+  if (!currentOrigin) {
+    siteModeEl.disabled = true;
+    openEditorBtn.disabled = true;
   }
 
-  return browser.storage.local.get({
-    numFuzzEnabled:  false,
-    numFuzzLevel:    3,
-    numFuzzProb:     0.5,
-    numFuzzSites:    {},
-    numFuzzLastMult: null,
-    numFuzzLastUrl:  "",
-  });
+  return browser.storage.local.get(
+    Object.assign({}, DEFAULT_SETTINGS, { numFuzzLastMult: null, numFuzzLastUrl: "" }),
+  );
 }).then((s) => {
   toggleEnable.checked = s.numFuzzEnabled;
+  toggleWasm.checked   = s.numFuzzWasm;
+  toggleRandom.checked = s.numFuzzRandom;
   sliderLevel.value    = s.numFuzzLevel;
   sliderProb.value     = Math.round(s.numFuzzProb * 100);
   valLevel.textContent = s.numFuzzLevel;
   valProb.textContent  = Math.round(s.numFuzzProb * 100) + "%";
   updateLevelDesc(s.numFuzzLevel);
 
-  // サイト別設定をセレクトに反映（未設定サイトはデフォルト「off」）
+  // サイト別設定をセレクトに反映（未設定サイトはグローバルに従う）
   if (currentOrigin && currentOrigin in s.numFuzzSites) {
     siteModeEl.value = s.numFuzzSites[currentOrigin] ? "on" : "off";
   } else {
-    siteModeEl.value = "off";
+    siteModeEl.value = "global";
   }
 
-  updateSiteBadge(s.numFuzzSites);
-  updateStatus(s.numFuzzEnabled, s.numFuzzSites, s.numFuzzLastMult, s.numFuzzLastUrl);
+  updateRulesInfo(s);
+  updateSiteBadge(s);
+  updateStatus(s);
+  updateLastMult(s.numFuzzLastMult, s.numFuzzLastUrl);
 }).catch((e) => {
   currentOriginEl.textContent = "エラー: " + e.message;
 });
@@ -153,31 +145,45 @@ function saveSettings() {
       }
     }
 
-    return browser.storage.local.set({
-      numFuzzEnabled:  toggleEnable.checked,
-      numFuzzLevel:    Number(sliderLevel.value),
-      numFuzzProb:     Number(sliderProb.value) / 100,
-      numFuzzSites:    sites,
-      numFuzzNextMult: genNextMult(Number(sliderLevel.value)), // 次回ロード用乗数を事前生成
-    }).then(() => sites);
-  }).then((sites) => {
-    updateSiteBadge(sites);
-    updateStatus(toggleEnable.checked, sites, null, "");
+    const next = {
+      numFuzzEnabled: toggleEnable.checked,
+      numFuzzWasm:    toggleWasm.checked,
+      numFuzzRandom:  toggleRandom.checked,
+      numFuzzLevel:   Number(sliderLevel.value),
+      numFuzzProb:    Number(sliderProb.value) / 100,
+      numFuzzSites:   sites,
+    };
+    return browser.storage.local.set(next).then(() => next);
+  }).then((next) => {
+    updateSiteBadge(next);
+    updateStatus(next);
   });
 }
 
 // ---- イベント -------------------------------------------------------
 
 toggleEnable.addEventListener("change", saveSettings);
+toggleWasm.addEventListener("change", saveSettings);
+toggleRandom.addEventListener("change", saveSettings);
 siteModeEl.addEventListener("change", saveSettings);
 
+openEditorBtn.addEventListener("click", () => {
+  const url = browser.runtime.getURL("editor.html") +
+    "?tab=" + encodeURIComponent(currentTabId) + "&origin=" + encodeURIComponent(currentOrigin);
+  browser.tabs.create({ url }).then(() => window.close());
+});
+
+// ドラッグ中は表示だけ更新し、確定時に保存する
 sliderLevel.addEventListener("input", () => {
   valLevel.textContent = sliderLevel.value;
   updateLevelDesc(Number(sliderLevel.value));
-  saveSettings();
 });
+sliderLevel.addEventListener("change", saveSettings);
 
 sliderProb.addEventListener("input", () => {
   valProb.textContent = sliderProb.value + "%";
-  saveSettings();
 });
+sliderProb.addEventListener("change", saveSettings);
+
+// 拡張機能の再読み込み漏れに気付けるよう、実際に動いているバージョンを表示する
+document.getElementById("footer").textContent = "NumFuzz v" + browser.runtime.getManifest().version;

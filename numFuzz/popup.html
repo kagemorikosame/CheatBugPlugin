@@ -202,6 +202,21 @@
       }
       #site-badge.on  { background: rgba(230,92,0,0.25); color: #f9d423; }
       #site-badge.off { background: rgba(255,80,80,0.15); color: #ff6b6b; }
+
+      /* 置き換えルール */
+      #rules-info { font-size: 0.75rem; color: #8b949e; margin-bottom: 8px; }
+      #open-editor {
+        width: 100%;
+        background: #21262d;
+        color: #cdd9e5;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 7px 8px;
+        font-size: 0.8rem;
+        cursor: pointer;
+      }
+      #open-editor:hover { border-color: #e65c00; }
+      #open-editor:disabled { opacity: 0.5; cursor: default; }
     </style>
   </head>
   <body>
@@ -231,6 +246,13 @@
       <div id="site-badge">グローバル設定を使用中</div>
     </div>
 
+    <!-- 置き換えルール -->
+    <div class="section">
+      <div class="section-title">置き換えルール</div>
+      <div id="rules-info">このサイトのルール: なし</div>
+      <button id="open-editor">ルール・検出値を編集…</button>
+    </div>
+
     <!-- デフォルト設定 -->
     <div class="section">
       <div class="section-title">デフォルト設定</div>
@@ -244,11 +266,31 @@
           <span class="slider"></span>
         </label>
       </div>
+      <div class="toggle-row" style="margin-top:10px;">
+        <div>
+          <div class="toggle-label">Unity の C# コードも書き換える</div>
+          <div class="toggle-desc">Unity WebGL（IL2CPP）の .wasm のうち、名前の分かるゲームの C# メソッド内の定数のみ。エンジン部分は変更しません</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggle-wasm" />
+          <span class="slider"></span>
+        </label>
+      </div>
     </div>
 
     <!-- 強度・確率 -->
     <div class="section">
       <div class="section-title">パラメータ</div>
+      <div class="toggle-row" style="margin-bottom:12px;">
+        <div>
+          <div class="toggle-label">ランダム書き換え</div>
+          <div class="toggle-desc">OFF にすると置き換えルールだけを適用</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggle-random" />
+          <span class="slider"></span>
+        </label>
+      </div>
       <div class="slider-row">
         <label>強度レベル</label>
         <input type="range" id="slider-level" min="1" max="5" step="1" value="3" />
@@ -270,11 +312,12 @@
     <div class="notice">
       <strong>適用タイミング：</strong>
       設定変更後にゲームページを<strong>リロード</strong>すると、
-      JS・JSON内の数値がページ読み込み時に一括で差し替えられます。
+      JS・JSON・WASM内の数値がページ読み込み時に一括で差し替えられます。
     </div>
 
-    <footer>NumFuzz v1.0.0</footer>
+    <footer id="footer">NumFuzz</footer>
 
+    <script src="common.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

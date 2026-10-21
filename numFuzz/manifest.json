@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "NumFuzz",
-  "version": "1.0.0",
-  "description": "ページ読み込み時にゲームのJS・JSON内の数値をランダムに差し替えるプラグイン",
+  "version": "1.6.0",
+  "description": "ページ読み込み時にゲームのJS・JSON・WASM内の数値をランダムに差し替えるプラグイン",
   "icons": {
     "48": "icons/icon48.svg",
     "96": "icons/icon96.svg"
@@ -12,17 +12,34 @@
     "default_popup": "popup.html",
     "default_title": "NumFuzz"
   },
-  "permissions": ["activeTab", "storage", "tabs", "webRequest", "webRequestBlocking", "<all_urls>"],
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "webNavigation",
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>"
+  ],
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     }
   ],
   "background": {
-    "scripts": ["background.js"],
-    "persistent": false
+    "scripts": [
+      "common.js",
+      "unityMeta.js",
+      "wasmFuzz.js",
+      "background.js"
+    ],
+    "persistent": true
   }
 }
